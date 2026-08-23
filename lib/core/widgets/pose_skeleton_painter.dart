@@ -5,11 +5,12 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
+import '../constants/app_constants.dart';
 import '../utils/pose_skeleton_graph.dart';
 import '../../data/models/pose_landmark_point.dart';
 
-class LivePoseSkeletonPainter extends CustomPainter {
-  LivePoseSkeletonPainter({
+class SkeletonPainter extends CustomPainter {
+  SkeletonPainter({
     required this.landmarks,
     required this.imageSize,
     required this.rotation,
@@ -31,6 +32,26 @@ class LivePoseSkeletonPainter extends CustomPainter {
       return;
     }
 
+    final projectedLandmarks = <String, _ProjectedLandmark>{};
+    for (final landmark in landmarks) {
+      if (landmark.likelihood < AppConstants.minimumLandmarkLikelihood) {
+        continue;
+      }
+
+      final offset = Offset(
+        _translateX(landmark.x, size),
+        _translateY(landmark.y, size),
+      );
+      if (!_isInsideCanvas(offset, size)) {
+        continue;
+      }
+      projectedLandmarks[landmark.type] = _ProjectedLandmark(landmark, offset);
+    }
+
+    if (projectedLandmarks.isEmpty) {
+      return;
+    }
+
     final pointPaint = Paint()
       ..color = pointColor
       ..style = PaintingStyle.fill
@@ -41,28 +62,27 @@ class LivePoseSkeletonPainter extends CustomPainter {
       ..strokeWidth = 3.2
       ..strokeCap = StrokeCap.round;
 
-    final indexedLandmarks = PoseSkeletonGraph.indexByType(landmarks);
-    for (final connection in PoseSkeletonGraph.visibleConnections(landmarks)) {
-      final start = indexedLandmarks[connection.startType]!;
-      final end = indexedLandmarks[connection.endType]!;
-      canvas.drawLine(
-        Offset(_translateX(start.x, size), _translateY(start.y, size)),
-        Offset(_translateX(end.x, size), _translateY(end.y, size)),
-        linePaint,
-      );
+    final visibleLandmarks = projectedLandmarks.values
+        .map((entry) => entry.landmark)
+        .toList(growable: false);
+    for (final connection in PoseSkeletonGraph.visibleConnections(
+      visibleLandmarks,
+    )) {
+      final start = projectedLandmarks[connection.startType]!;
+      final end = projectedLandmarks[connection.endType]!;
+      canvas.drawLine(start.offset, end.offset, linePaint);
     }
 
-    for (final landmark in landmarks) {
+    for (final entry in projectedLandmarks.values) {
+      final landmark = entry.landmark;
       final depthFactor = (1 - (landmark.z / 800).clamp(-0.5, 0.8)).toDouble();
       final radius = max(2.4, 4.2 * depthFactor);
       pointPaint.color = pointColor.withValues(
-        alpha: landmark.likelihood.clamp(0.35, 1.0).toDouble(),
+        alpha: landmark.likelihood
+            .clamp(AppConstants.minimumLandmarkLikelihood, 1.0)
+            .toDouble(),
       );
-      canvas.drawCircle(
-        Offset(_translateX(landmark.x, size), _translateY(landmark.y, size)),
-        radius,
-        pointPaint,
-      );
+      canvas.drawCircle(entry.offset, radius, pointPaint);
     }
   }
 
@@ -102,8 +122,15 @@ class LivePoseSkeletonPainter extends CustomPainter {
     }
   }
 
+  bool _isInsideCanvas(Offset offset, Size size) {
+    return offset.dx >= 0 &&
+        offset.dx <= size.width &&
+        offset.dy >= 0 &&
+        offset.dy <= size.height;
+  }
+
   @override
-  bool shouldRepaint(covariant LivePoseSkeletonPainter oldDelegate) {
+  bool shouldRepaint(covariant SkeletonPainter oldDelegate) {
     return oldDelegate.landmarks != landmarks ||
         oldDelegate.imageSize != imageSize ||
         oldDelegate.rotation != rotation ||
@@ -142,7 +169,23 @@ class StoredPoseSkeletonPainter extends CustomPainter {
       Offset.zero & size,
     );
 
-    final indexedLandmarks = PoseSkeletonGraph.indexByType(landmarks);
+    final projectedLandmarks = <String, _ProjectedLandmark>{};
+    for (final landmark in landmarks) {
+      if (landmark.likelihood < AppConstants.minimumLandmarkLikelihood) {
+        continue;
+      }
+
+      final offset = _mapOffset(landmark, inputRect, outputRect);
+      if (offset == null || !_isInsideCanvas(offset, size)) {
+        continue;
+      }
+      projectedLandmarks[landmark.type] = _ProjectedLandmark(landmark, offset);
+    }
+
+    if (projectedLandmarks.isEmpty) {
+      return;
+    }
+
     final linePaint = Paint()
       ..color = lineColor.withValues(alpha: 0.88)
       ..style = PaintingStyle.stroke
@@ -150,27 +193,26 @@ class StoredPoseSkeletonPainter extends CustomPainter {
       ..strokeWidth = max(1.8, size.shortestSide * 0.022);
     final pointPaint = Paint()..style = PaintingStyle.fill;
 
-    for (final connection in PoseSkeletonGraph.visibleConnections(landmarks)) {
-      final start = indexedLandmarks[connection.startType]!;
-      final end = indexedLandmarks[connection.endType]!;
-      final startOffset = _mapOffset(start, inputRect, outputRect);
-      final endOffset = _mapOffset(end, inputRect, outputRect);
-      if (startOffset == null || endOffset == null) {
-        continue;
-      }
-      canvas.drawLine(startOffset, endOffset, linePaint);
+    final visibleLandmarks = projectedLandmarks.values
+        .map((entry) => entry.landmark)
+        .toList(growable: false);
+    for (final connection in PoseSkeletonGraph.visibleConnections(
+      visibleLandmarks,
+    )) {
+      final start = projectedLandmarks[connection.startType]!;
+      final end = projectedLandmarks[connection.endType]!;
+      canvas.drawLine(start.offset, end.offset, linePaint);
     }
 
-    for (final landmark in landmarks) {
-      final offset = _mapOffset(landmark, inputRect, outputRect);
-      if (offset == null) {
-        continue;
-      }
+    for (final entry in projectedLandmarks.values) {
+      final landmark = entry.landmark;
       pointPaint.color = pointColor.withValues(
-        alpha: landmark.likelihood.clamp(0.4, 1.0).toDouble(),
+        alpha: landmark.likelihood
+            .clamp(AppConstants.minimumLandmarkLikelihood, 1.0)
+            .toDouble(),
       );
       canvas.drawCircle(
-        offset,
+        entry.offset,
         max(1.8, size.shortestSide * 0.028),
         pointPaint,
       );
@@ -194,6 +236,13 @@ class StoredPoseSkeletonPainter extends CustomPainter {
     );
   }
 
+  bool _isInsideCanvas(Offset offset, Size size) {
+    return offset.dx >= 0 &&
+        offset.dx <= size.width &&
+        offset.dy >= 0 &&
+        offset.dy <= size.height;
+  }
+
   @override
   bool shouldRepaint(covariant StoredPoseSkeletonPainter oldDelegate) {
     return oldDelegate.landmarks != landmarks ||
@@ -202,4 +251,11 @@ class StoredPoseSkeletonPainter extends CustomPainter {
         oldDelegate.pointColor != pointColor ||
         oldDelegate.lineColor != lineColor;
   }
+}
+
+class _ProjectedLandmark {
+  const _ProjectedLandmark(this.landmark, this.offset);
+
+  final PoseLandmarkPoint landmark;
+  final Offset offset;
 }

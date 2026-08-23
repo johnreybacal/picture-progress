@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../app/providers.dart';
 import '../../../../data/models/pose_series.dart';
 import '../../../capture/presentation/screens/camera_view.dart';
+import '../../../settings/presentation/screens/app_settings_view.dart';
 import 'series_detail_view.dart';
 
 class SeriesHomeView extends ConsumerWidget {
@@ -19,6 +20,16 @@ class SeriesHomeView extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Picture Progress'),
         actions: [
+          IconButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const AppSettingsView(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.tune_rounded),
+          ),
           IconButton(
             onPressed: () =>
                 ref.read(seriesListControllerProvider.notifier).refresh(),

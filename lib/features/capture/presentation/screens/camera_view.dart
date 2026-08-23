@@ -3,12 +3,14 @@ import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
+import '../../../../app/app_settings.dart';
 import '../../../../app/providers.dart';
 import '../../../../core/constants/app_constants.dart';
+import '../../../../core/utils/landmark_smoother.dart';
 import '../../../../core/utils/pose_alignment_engine.dart';
 import '../../../../core/widgets/pose_skeleton_painter.dart';
 import '../../../../data/models/pose_landmark_point.dart';
@@ -40,6 +42,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
   };
 
   late final PoseDetector _streamPoseDetector;
+  late final LandmarkSmoother _landmarkSmoother;
 
   List<CameraDescription> _availableCameras = const [];
   CameraController? _cameraController;
@@ -49,12 +52,11 @@ class _CameraViewState extends ConsumerState<CameraView> {
   PoseAlignmentResult _alignmentResult = const PoseAlignmentResult.empty();
   InputImageRotation _latestFrameRotation = InputImageRotation.rotation0deg;
   Size _latestFrameSize = Size.zero;
+  double _poseMotion = 1.0;
 
   bool _initializing = true;
   bool _processingFrame = false;
   bool _capturing = false;
-  bool _autoCaptureEnabled = true;
-  double _autoCaptureThreshold = AppConstants.defaultAutoCaptureThreshold;
   DateTime? _alignmentHeldSince;
   String? _errorMessage;
 
@@ -62,9 +64,6 @@ class _CameraViewState extends ConsumerState<CameraView> {
   double _maxZoomLevel = AppConstants.defaultZoomLevel;
   double _zoomLevel = AppConstants.defaultZoomLevel;
   double _baseZoomLevel = AppConstants.defaultZoomLevel;
-  double _minExposureOffset = -2;
-  double _maxExposureOffset = 2;
-  double _exposureOffset = AppConstants.defaultExposureOffset;
 
   bool get _canAutoCapture {
     return !widget.isBaselineCapture &&
@@ -75,6 +74,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
   @override
   void initState() {
     super.initState();
+    _landmarkSmoother = LandmarkSmoother();
     _streamPoseDetector = PoseDetector(
       options: PoseDetectorOptions(
         model: PoseDetectionModel.base,
@@ -86,6 +86,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
 
   @override
   void dispose() {
+    _landmarkSmoother.reset();
     unawaited(_cameraController?.dispose());
     unawaited(_streamPoseDetector.close());
     super.dispose();
@@ -146,13 +147,9 @@ class _CameraViewState extends ConsumerState<CameraView> {
 
     final minZoom = await controller.getMinZoomLevel();
     final maxZoom = await controller.getMaxZoomLevel();
-    final minExposure = await controller.getMinExposureOffset();
-    final maxExposure = await controller.getMaxExposureOffset();
     final zoom = _zoomLevel.clamp(minZoom, maxZoom).toDouble();
-    final exposure = _exposureOffset.clamp(minExposure, maxExposure).toDouble();
 
     await controller.setZoomLevel(zoom);
-    await controller.setExposureOffset(exposure);
     await controller.startImageStream(_processCameraFrame);
 
     if (!mounted) {
@@ -160,17 +157,16 @@ class _CameraViewState extends ConsumerState<CameraView> {
       return;
     }
 
+    _landmarkSmoother.reset();
     setState(() {
       _cameraController = controller;
       _minZoomLevel = minZoom;
       _maxZoomLevel = maxZoom;
       _zoomLevel = zoom;
-      _minExposureOffset = minExposure;
-      _maxExposureOffset = maxExposure;
-      _exposureOffset = exposure;
       _alignmentHeldSince = null;
       _latestLandmarks = const [];
       _alignmentResult = const PoseAlignmentResult.empty();
+      _poseMotion = 1.0;
       _initializing = false;
     });
   }
@@ -208,19 +204,21 @@ class _CameraViewState extends ConsumerState<CameraView> {
       }
 
       if (poses.isEmpty) {
-        setState(() {
-          _latestLandmarks = const [];
-          _latestFrameRotation = input.rotation;
-          _latestFrameSize = input.imageSize;
-          _alignmentResult = const PoseAlignmentResult.empty();
-          _alignmentHeldSince = null;
-        });
+        _landmarkSmoother.reset();
+        _clearTracking(input.rotation, input.imageSize);
         return;
       }
 
-      final landmarks = poses.first.landmarks.values
+      final rawLandmarks = poses.first.landmarks.values
           .map(PoseLandmarkPoint.fromPoseLandmark)
-          .toList();
+          .toList(growable: false);
+      final landmarks = _landmarkSmoother.smooth(rawLandmarks);
+      if (landmarks.isEmpty) {
+        _clearTracking(input.rotation, input.imageSize);
+        return;
+      }
+
+      final poseMotion = _landmarkSmoother.lastAverageMotion;
       final mirrorBaseline =
           _canAutoCapture &&
           widget.baselineRecord!.cameraLens !=
@@ -238,35 +236,43 @@ class _CameraViewState extends ConsumerState<CameraView> {
         _latestFrameRotation = input.rotation;
         _latestFrameSize = input.imageSize;
         _alignmentResult = alignmentResult;
+        _poseMotion = poseMotion;
       });
 
-      _handleAutoCapture(alignmentResult.score);
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _errorMessage = error.toString();
-      });
+      _handleAutoCapture(alignmentResult.score, poseMotion);
+    } catch (_) {
+      _alignmentHeldSince = null;
     } finally {
       _processingFrame = false;
     }
   }
 
-  void _handleAutoCapture(double score) {
-    if (!_canAutoCapture || !_autoCaptureEnabled || _capturing) {
+  void _clearTracking(InputImageRotation rotation, Size imageSize) {
+    setState(() {
+      _latestLandmarks = const [];
+      _latestFrameRotation = rotation;
+      _latestFrameSize = imageSize;
+      _alignmentResult = const PoseAlignmentResult.empty();
+      _poseMotion = 1.0;
+      _alignmentHeldSince = null;
+    });
+  }
+
+  void _handleAutoCapture(double score, double poseMotion) {
+    final settings = ref.read(appSettingsProvider);
+    if (!_canAutoCapture || !settings.autoCaptureEnabled || _capturing) {
       _alignmentHeldSince = null;
       return;
     }
-    if (score < _autoCaptureThreshold) {
+    if (score < settings.alignmentThreshold ||
+        poseMotion > settings.stabilitySensitivity) {
       _alignmentHeldSince = null;
       return;
     }
 
     final now = DateTime.now();
     _alignmentHeldSince ??= now;
-    if (now.difference(_alignmentHeldSince!) >=
-        AppConstants.autoCaptureHoldDuration) {
+    if (now.difference(_alignmentHeldSince!) >= settings.autoCaptureDelay) {
       _alignmentHeldSince = null;
       unawaited(_captureFrame());
     }
@@ -341,6 +347,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
       _showSnackBar(error.toString());
     } finally {
       if (shouldRestartStream && mounted && controller.value.isInitialized) {
+        _landmarkSmoother.reset();
         await controller.startImageStream(_processCameraFrame);
       }
       if (mounted) {
@@ -369,7 +376,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
       }
       return poses.first.landmarks.values
           .map(PoseLandmarkPoint.fromPoseLandmark)
-          .toList();
+          .toList(growable: false);
     } finally {
       await detector.close();
     }
@@ -450,23 +457,6 @@ class _CameraViewState extends ConsumerState<CameraView> {
     });
   }
 
-  Future<void> _setExposureOffset(double offset) async {
-    final controller = _cameraController;
-    if (controller == null || !controller.value.isInitialized) {
-      return;
-    }
-
-    final result = await controller.setExposureOffset(
-      offset.clamp(_minExposureOffset, _maxExposureOffset).toDouble(),
-    );
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _exposureOffset = result;
-    });
-  }
-
   void _showSnackBar(String message) {
     if (!mounted) {
       return;
@@ -477,12 +467,14 @@ class _CameraViewState extends ConsumerState<CameraView> {
 
   @override
   Widget build(BuildContext context) {
+    final settings = ref.watch(appSettingsProvider);
     final controller = _cameraController;
     final autoCaptureProgress = _alignmentHeldSince == null
         ? 0.0
         : (DateTime.now().difference(_alignmentHeldSince!).inMilliseconds /
-                  AppConstants.autoCaptureHoldDuration.inMilliseconds)
-              .clamp(0.0, 1.0);
+                  settings.autoCaptureDelay.inMilliseconds)
+              .clamp(0.0, 1.0)
+              .toDouble();
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -516,36 +508,21 @@ class _CameraViewState extends ConsumerState<CameraView> {
                   child: SafeArea(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      child: Row(
                         children: [
-                          Row(
-                            children: [
-                              _GlassIconButton(
-                                icon: Icons.arrow_back_ios_new_rounded,
-                                onPressed: () =>
-                                    Navigator.of(context).maybePop(),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: _InfoPill(
-                                  title: widget.series.name,
-                                  subtitle: widget.isBaselineCapture
-                                      ? 'Capture baseline posture'
-                                      : 'Align and capture progress shot',
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              _GlassIconButton(
-                                icon: Icons.flip_camera_ios_rounded,
-                                onPressed: _availableCameras.length > 1
-                                    ? _switchCamera
-                                    : null,
-                              ),
-                            ],
+                          _GlassIconButton(
+                            icon: Icons.arrow_back_ios_new_rounded,
+                            onPressed: () => Navigator.of(context).maybePop(),
                           ),
-                          const SizedBox(height: 14),
-                          _buildStatusPanel(autoCaptureProgress),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _InfoPill(
+                              title: widget.series.name,
+                              subtitle: widget.isBaselineCapture
+                                  ? 'Save a clean full-body baseline frame.'
+                                  : _statusMessage(settings),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -558,8 +535,11 @@ class _CameraViewState extends ConsumerState<CameraView> {
                   child: SafeArea(
                     top: false,
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                      child: _buildBottomControls(),
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                      child: _buildBottomControls(
+                        settings,
+                        autoCaptureProgress,
+                      ),
                     ),
                   ),
                 ),
@@ -604,7 +584,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
                   CameraPreview(controller),
                   IgnorePointer(
                     child: CustomPaint(
-                      painter: LivePoseSkeletonPainter(
+                      painter: SkeletonPainter(
                         landmarks: _latestLandmarks,
                         imageSize: _latestFrameSize,
                         rotation: _latestFrameRotation,
@@ -622,189 +602,127 @@ class _CameraViewState extends ConsumerState<CameraView> {
     );
   }
 
-  Widget _buildStatusPanel(double autoCaptureProgress) {
+  Widget _buildBottomControls(
+    AppSettings settings,
+    double autoCaptureProgress,
+  ) {
     final theme = Theme.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.56),
-        borderRadius: BorderRadius.circular(24),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    final showProgress =
+        _canAutoCapture &&
+        settings.autoCaptureEnabled &&
+        _alignmentResult.score >= settings.alignmentThreshold &&
+        _poseMotion <= settings.stabilitySensitivity;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (!widget.isBaselineCapture)
+          _CaptureStatusCard(
+            score: _alignmentResult.score,
+            statusText: _statusMessage(settings),
+            progress: autoCaptureProgress,
+            showProgress: showProgress,
+          ),
+        if (!widget.isBaselineCapture) const SizedBox(height: 14),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.58),
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+            child: Column(
               children: [
-                Expanded(
-                  child: Text(
-                    widget.isBaselineCapture
-                        ? 'Hold a clean baseline stance. Shoulders, hips, knees, and feet should be fully visible.'
-                        : 'Use the live skeleton and alignment score to lock the same framing before each shot.',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: Colors.white,
+                Row(
+                  children: [
+                    Text(
+                      'Zoom ${_zoomLevel.toStringAsFixed(1)}x',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                _MetricBadge(
-                  label: 'Lens',
-                  value:
+                    const Spacer(),
+                    Text(
                       (_cameraController?.description.lensDirection.name ??
                               'front')
                           .toUpperCase(),
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ],
+                ),
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 3,
+                    thumbShape: const RoundSliderThumbShape(
+                      enabledThumbRadius: 8,
+                    ),
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 16,
+                    ),
+                  ),
+                  child: Slider(
+                    value: _zoomLevel,
+                    min: _minZoomLevel,
+                    max: _maxZoomLevel,
+                    onChanged: (value) => unawaited(_setZoomLevel(value)),
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 14),
-            if (_canAutoCapture) ...[
-              Row(
-                children: [
-                  Expanded(
-                    child: LinearProgressIndicator(
-                      value: _alignmentResult.score / 100,
-                      minHeight: 10,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    '${_alignmentResult.score.round()}%',
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              LinearProgressIndicator(
-                value: autoCaptureProgress,
-                minHeight: 6,
-                borderRadius: BorderRadius.circular(999),
-                color: theme.colorScheme.tertiary,
-                backgroundColor: Colors.white24,
-              ),
-            ] else
-              Text(
-                _latestLandmarks.isEmpty
-                    ? 'Step back until the tracker sees your whole body.'
-                    : 'Pose tracked live. Save the reference when the stance is stable.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: Colors.white70,
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Expanded(child: SizedBox()),
+            _ShutterButton(
+              busy: _capturing,
+              semanticLabel: widget.isBaselineCapture
+                  ? 'Save baseline pose'
+                  : 'Capture progress shot',
+              onPressed: _capturing ? null : _captureFrame,
+            ),
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: _GlassIconButton(
+                  icon: Icons.flip_camera_ios_rounded,
+                  onPressed: _availableCameras.length > 1
+                      ? _switchCamera
+                      : null,
                 ),
               ),
+            ),
           ],
         ),
-      ),
+      ],
     );
   }
 
-  Widget _buildBottomControls() {
-    final theme = Theme.of(context);
-    final canAdjustExposure =
-        (_maxExposureOffset - _minExposureOffset).abs() > 0.01;
+  String _statusMessage(AppSettings settings) {
+    if (_latestLandmarks.isEmpty) {
+      return 'Step back until shoulders, hips, knees, and feet are visible.';
+    }
+    if (!_canAutoCapture || !settings.autoCaptureEnabled) {
+      return 'Frame the pose, then trigger the shutter manually.';
+    }
+    if (_alignmentResult.score < settings.alignmentThreshold) {
+      return 'Match the baseline stance before auto-capture arms.';
+    }
+    if (_poseMotion > settings.stabilitySensitivity) {
+      return 'Hold still. Auto-capture waits for the pose to settle.';
+    }
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(28),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Zoom ${_zoomLevel.toStringAsFixed(1)}x',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-                if (_canAutoCapture)
-                  Switch.adaptive(
-                    value: _autoCaptureEnabled,
-                    onChanged: (value) {
-                      setState(() {
-                        _autoCaptureEnabled = value;
-                        _alignmentHeldSince = null;
-                      });
-                    },
-                  ),
-              ],
-            ),
-            Slider(
-              value: _zoomLevel,
-              min: _minZoomLevel,
-              max: _maxZoomLevel,
-              onChanged: (value) => unawaited(_setZoomLevel(value)),
-            ),
-            if (canAdjustExposure) ...[
-              Text(
-                'Exposure ${_exposureOffset.toStringAsFixed(1)}',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: Colors.white,
-                ),
-              ),
-              Slider(
-                value: _exposureOffset.clamp(
-                  _minExposureOffset,
-                  _maxExposureOffset,
-                ),
-                min: _minExposureOffset,
-                max: _maxExposureOffset,
-                onChanged: (value) => unawaited(_setExposureOffset(value)),
-              ),
-            ],
-            if (_canAutoCapture) ...[
-              Text(
-                'Auto-capture threshold ${_autoCaptureThreshold.round()}%',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: Colors.white,
-                ),
-              ),
-              Slider(
-                value: _autoCaptureThreshold,
-                min: 75,
-                max: 98,
-                divisions: 23,
-                label: '${_autoCaptureThreshold.round()}%',
-                onChanged: (value) {
-                  setState(() {
-                    _autoCaptureThreshold = value;
-                    _alignmentHeldSince = null;
-                  });
-                },
-              ),
-            ],
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: _capturing ? null : _captureFrame,
-                icon: _capturing
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.camera_alt_rounded),
-                label: Text(
-                  widget.isBaselineCapture
-                      ? 'Save Baseline Pose'
-                      : 'Capture Progress Shot',
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+    final elapsedMs = _alignmentHeldSince == null
+        ? 0
+        : DateTime.now().difference(_alignmentHeldSince!).inMilliseconds;
+    final remainingMs = (settings.autoCaptureDelay.inMilliseconds - elapsedMs)
+        .clamp(0, settings.autoCaptureDelay.inMilliseconds);
+    final remainingSeconds = (remainingMs / 1000).toStringAsFixed(1);
+    return 'Aligned. Auto-capture in ${remainingSeconds}s.';
   }
 }
 
@@ -879,39 +797,120 @@ class _InfoPill extends StatelessWidget {
   }
 }
 
-class _MetricBadge extends StatelessWidget {
-  const _MetricBadge({required this.label, required this.value});
+class _CaptureStatusCard extends StatelessWidget {
+  const _CaptureStatusCard({
+    required this.score,
+    required this.statusText,
+    required this.progress,
+    required this.showProgress,
+  });
 
-  final String label;
-  final String value;
+  final double score;
+  final String statusText;
+  final double progress;
+  final bool showProgress;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(18),
+        color: Colors.black.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(24),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              label,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: Colors.white70,
-              ),
+            Row(
+              children: [
+                Text(
+                  '${score.round()}% aligned',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const Spacer(),
+                if (showProgress)
+                  Text(
+                    '${(progress * 100).round()}%',
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      color: Colors.white70,
+                    ),
+                  ),
+              ],
             ),
+            const SizedBox(height: 6),
             Text(
-              value,
-              style: theme.textTheme.labelLarge?.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-              ),
+              statusText,
+              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
             ),
+            if (showProgress) ...[
+              const SizedBox(height: 10),
+              LinearProgressIndicator(
+                value: progress,
+                minHeight: 5,
+                borderRadius: BorderRadius.circular(999),
+                backgroundColor: Colors.white24,
+              ),
+            ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ShutterButton extends StatelessWidget {
+  const _ShutterButton({
+    required this.busy,
+    required this.semanticLabel,
+    required this.onPressed,
+  });
+
+  final bool busy;
+  final String semanticLabel;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: semanticLabel,
+      child: GestureDetector(
+        onTap: onPressed,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 4),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: busy ? Colors.white70 : Colors.white,
+              ),
+              child: SizedBox(
+                width: 74,
+                height: 74,
+                child: busy
+                    ? const Center(
+                        child: SizedBox(
+                          width: 26,
+                          height: 26,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: Colors.black,
+                          ),
+                        ),
+                      )
+                    : null,
+              ),
+            ),
+          ),
         ),
       ),
     );

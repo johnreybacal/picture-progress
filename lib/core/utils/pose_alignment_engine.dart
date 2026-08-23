@@ -49,7 +49,12 @@ class PoseGeometry {
   }
 
   static PosePoint anchorFor(List<PoseLandmarkPoint> landmarks) {
-    final map = {for (final landmark in landmarks) landmark.type: landmark};
+    final source = _visibleLandmarks(landmarks);
+    if (source.isEmpty) {
+      return const PosePoint(x: 0, y: 0);
+    }
+
+    final map = {for (final landmark in source) landmark.type: landmark};
     final leftHip = map['leftHip'];
     final rightHip = map['rightHip'];
     if (leftHip != null && rightHip != null) {
@@ -68,19 +73,18 @@ class PoseGeometry {
       );
     }
 
-    return boundingBoxFor(landmarks).center;
+    return boundingBoxFor(source).center;
   }
 
   static List<PoseLandmarkPoint> _visibleLandmarks(
     List<PoseLandmarkPoint> landmarks,
   ) {
-    final visible = landmarks
+    return landmarks
         .where(
           (landmark) =>
               landmark.likelihood >= AppConstants.minimumLandmarkLikelihood,
         )
         .toList();
-    return visible.isEmpty ? landmarks : visible;
   }
 }
 
@@ -107,6 +111,10 @@ class PoseAlignmentEngine {
     ('rightShoulder', 'rightElbow', 'rightWrist'),
     ('leftHip', 'leftKnee', 'leftAnkle'),
     ('rightHip', 'rightKnee', 'rightAnkle'),
+    ('leftShoulder', 'leftHip', 'leftKnee'),
+    ('rightShoulder', 'rightHip', 'rightKnee'),
+    ('leftShoulder', 'leftHip', 'rightHip'),
+    ('rightShoulder', 'rightHip', 'leftHip'),
     ('leftElbow', 'leftShoulder', 'leftHip'),
     ('rightElbow', 'rightShoulder', 'rightHip'),
   ];
@@ -216,9 +224,9 @@ class PoseAlignmentEngine {
     final angleSimilarity = _average(angleScores, fallback: vectorSimilarity);
 
     final weightedScore =
-        (pointSimilarity * 0.5) +
-        (vectorSimilarity * 0.3) +
-        (angleSimilarity * 0.2);
+        (pointSimilarity * 0.25) +
+        (vectorSimilarity * 0.25) +
+        (angleSimilarity * 0.5);
 
     return PoseAlignmentResult(
       score: (weightedScore * 100).clamp(0.0, 100.0).toDouble(),
@@ -234,9 +242,9 @@ class PoseAlignmentEngine {
     bool mirrorHorizontally = false,
   }) {
     final filteredLandmarks = landmarks.where((landmark) {
-      return landmark.likelihood >= AppConstants.minimumLandmarkLikelihood / 2;
+      return landmark.likelihood >= AppConstants.minimumLandmarkLikelihood;
     }).toList();
-    final source = filteredLandmarks.isEmpty ? landmarks : filteredLandmarks;
+    final source = filteredLandmarks;
     final map = {for (final landmark in source) landmark.type: landmark};
     final anchor = PoseGeometry.anchorFor(source);
     final box = PoseGeometry.boundingBoxFor(source);

@@ -7,6 +7,7 @@ import '../../../../data/models/pose_record.dart';
 import '../../../../data/models/pose_series.dart';
 import '../../../capture/presentation/screens/camera_view.dart';
 import '../../../export/presentation/screens/export_preview_page.dart';
+import '../../../settings/presentation/screens/app_settings_view.dart';
 import 'progress_shot_detail_view.dart';
 
 class SeriesDetailView extends ConsumerStatefulWidget {
@@ -40,6 +41,16 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
       appBar: AppBar(
         title: Text(_series.name),
         actions: [
+          IconButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const AppSettingsView(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.tune_rounded),
+          ),
           PopupMenuButton<_SeriesDetailAction>(
             onSelected: (action) {
               switch (action) {

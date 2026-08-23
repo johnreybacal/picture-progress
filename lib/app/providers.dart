@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'app_settings.dart';
 import '../core/utils/timelapse_command_builder.dart';
 import '../data/models/pose_record.dart';
 import '../data/models/pose_series.dart';
@@ -59,6 +60,11 @@ final seriesBaselineProvider = FutureProvider.family<PoseRecord?, int>((
   return ref.watch(poseRepositoryProvider).fetchBaselineRecord(seriesId);
 });
 
+final appSettingsProvider =
+    StateNotifierProvider<AppSettingsController, AppSettings>((ref) {
+      return AppSettingsController();
+    });
+
 class SeriesListController extends StateNotifier<AsyncValue<List<PoseSeries>>> {
   SeriesListController(this._ref) : super(const AsyncValue.loading());
 
@@ -93,5 +99,25 @@ class SeriesListController extends StateNotifier<AsyncValue<List<PoseSeries>>> {
 
   Future<void> refresh() async {
     await load();
+  }
+}
+
+class AppSettingsController extends StateNotifier<AppSettings> {
+  AppSettingsController() : super(const AppSettings());
+
+  void setAutoCaptureEnabled(bool enabled) {
+    state = state.copyWith(autoCaptureEnabled: enabled);
+  }
+
+  void setAlignmentThreshold(double threshold) {
+    state = state.copyWith(alignmentThreshold: threshold);
+  }
+
+  void setStabilitySensitivity(double sensitivity) {
+    state = state.copyWith(stabilitySensitivity: sensitivity);
+  }
+
+  void setAutoCaptureDelay(Duration delay) {
+    state = state.copyWith(autoCaptureDelay: delay);
   }
 }
