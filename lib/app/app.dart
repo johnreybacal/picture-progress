@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/theme/app_theme.dart';
-import '../features/series/presentation/screens/series_list_page.dart';
+import '../features/series/presentation/screens/series_home_view.dart';
 
 class PictureProgressApp extends StatelessWidget {
   const PictureProgressApp({super.key});
@@ -12,7 +12,7 @@ class PictureProgressApp extends StatelessWidget {
       title: 'Picture Progress',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
-      home: const SeriesListPage(),
+      home: const SeriesHomeView(),
     );
   }
 }

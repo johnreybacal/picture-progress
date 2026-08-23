@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
 import 'package:path/path.dart' as path;
@@ -41,6 +42,48 @@ class FileStorageService {
     return path.join(documentsDirectory.path, storedPath);
   }
 
+  Future<StoredImageDimensions> readImageDimensions(
+    String storedOrAbsolutePath,
+  ) async {
+    final absolutePath = await resolveAbsolutePath(storedOrAbsolutePath);
+    final bytes = await File(absolutePath).readAsBytes();
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frameInfo = await codec.getNextFrame();
+    return StoredImageDimensions(
+      width: frameInfo.image.width,
+      height: frameInfo.image.height,
+    );
+  }
+
+  Future<void> deleteStoredFile(String storedPath) async {
+    if (storedPath.isEmpty) {
+      return;
+    }
+
+    final absolutePath = await resolveAbsolutePath(storedPath);
+    final file = File(absolutePath);
+    if (await file.exists()) {
+      await file.delete();
+    }
+  }
+
+  Future<void> deleteSeriesStorage(int seriesId) async {
+    final documentsDirectory = await getApplicationDocumentsDirectory();
+    final captureDirectory = Directory(
+      path.join(documentsDirectory.path, 'captures', 'series_$seriesId'),
+    );
+    final exportDirectory = Directory(
+      path.join(documentsDirectory.path, 'exports', 'series_$seriesId'),
+    );
+
+    if (await captureDirectory.exists()) {
+      await captureDirectory.delete(recursive: true);
+    }
+    if (await exportDirectory.exists()) {
+      await exportDirectory.delete(recursive: true);
+    }
+  }
+
   Future<ExportWorkspace> createExportWorkspace(int seriesId) async {
     final documentsDirectory = await getApplicationDocumentsDirectory();
     final rootDirectory = Directory(
@@ -61,6 +104,13 @@ class FileStorageService {
       framesDirectory: framesDirectory,
     );
   }
+}
+
+class StoredImageDimensions {
+  const StoredImageDimensions({required this.width, required this.height});
+
+  final int width;
+  final int height;
 }
 
 class ExportWorkspace {

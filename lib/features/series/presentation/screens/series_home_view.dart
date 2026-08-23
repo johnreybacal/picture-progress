@@ -1,0 +1,348 @@
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../../app/providers.dart';
+import '../../../../data/models/pose_series.dart';
+import '../../../capture/presentation/screens/camera_view.dart';
+import 'series_detail_view.dart';
+
+class SeriesHomeView extends ConsumerWidget {
+  const SeriesHomeView({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final seriesAsync = ref.watch(seriesListControllerProvider);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Picture Progress'),
+        actions: [
+          IconButton(
+            onPressed: () =>
+                ref.read(seriesListControllerProvider.notifier).refresh(),
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _createSeries(context, ref),
+        icon: const Icon(Icons.add_photo_alternate_outlined),
+        label: const Text('New series'),
+      ),
+      body: SafeArea(
+        child: seriesAsync.when(
+          data: (series) {
+            return RefreshIndicator(
+              onRefresh: () =>
+                  ref.read(seriesListControllerProvider.notifier).refresh(),
+              child: ListView(
+                padding: const EdgeInsets.all(20),
+                children: [
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(18),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Gym posture timelapse',
+                            style: Theme.of(context).textTheme.headlineSmall,
+                          ),
+                          const SizedBox(height: 10),
+                          const Text(
+                            'Create a posture series per angle, save a baseline reference, and track progress with live skeleton alignment, stabilized exports, and local metadata control.',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (series.isEmpty)
+                    const Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(18),
+                        child: Text(
+                          'No series yet. Start with angles like Front Biceps, Side Profile, or Back Profile.',
+                        ),
+                      ),
+                    )
+                  else
+                    ...series.map(
+                      (item) => Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: _SeriesCard(
+                          series: item,
+                          onEdit: () => _renameSeries(context, ref, item),
+                          onDelete: () => _deleteSeries(context, ref, item),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          },
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, stackTrace) => Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(error.toString(), textAlign: TextAlign.center),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _createSeries(BuildContext context, WidgetRef ref) async {
+    final name = await _promptForSeriesName(
+      context,
+      title: 'Create Pose Series',
+    );
+    if (!context.mounted || name == null || name.isEmpty) {
+      return;
+    }
+
+    final createdSeries = await ref
+        .read(seriesListControllerProvider.notifier)
+        .createSeries(name);
+    if (!context.mounted) {
+      return;
+    }
+
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (context) =>
+            CameraView(series: createdSeries, isBaselineCapture: true),
+      ),
+    );
+
+    if (!context.mounted) {
+      return;
+    }
+
+    ref.invalidate(seriesBaselineProvider(createdSeries.id!));
+    ref.invalidate(seriesRecordsProvider(createdSeries.id!));
+    await ref.read(seriesListControllerProvider.notifier).refresh();
+  }
+
+  Future<void> _renameSeries(
+    BuildContext context,
+    WidgetRef ref,
+    PoseSeries series,
+  ) async {
+    final updatedName = await _promptForSeriesName(
+      context,
+      title: 'Edit Series Name',
+      initialValue: series.name,
+    );
+    if (!context.mounted || updatedName == null || updatedName.isEmpty) {
+      return;
+    }
+    await ref
+        .read(seriesListControllerProvider.notifier)
+        .renameSeries(series, updatedName);
+  }
+
+  Future<void> _deleteSeries(
+    BuildContext context,
+    WidgetRef ref,
+    PoseSeries series,
+  ) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete series?'),
+        content: Text(
+          'This removes ${series.name}, all progress shots, and local exports for that series.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldDelete != true || !context.mounted) {
+      return;
+    }
+
+    await ref.read(seriesListControllerProvider.notifier).deleteSeries(series);
+  }
+
+  Future<String?> _promptForSeriesName(
+    BuildContext context, {
+    required String title,
+    String initialValue = '',
+  }) async {
+    final controller = TextEditingController(text: initialValue);
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Series label',
+            hintText: 'Front Biceps',
+          ),
+          textInputAction: TextInputAction.done,
+          onSubmitted: (value) => Navigator.of(context).pop(value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SeriesCard extends ConsumerWidget {
+  const _SeriesCard({
+    required this.series,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final PoseSeries series;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(24),
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => SeriesDetailView(initialSeries: series),
+            ),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              FutureBuilder<String>(
+                future: ref
+                    .read(fileStorageServiceProvider)
+                    .resolveAbsolutePath(series.thumbnailPath),
+                builder: (context, snapshot) {
+                  final imagePath = snapshot.data;
+                  final hasImage = imagePath != null && imagePath.isNotEmpty;
+                  return ClipRRect(
+                    borderRadius: BorderRadius.circular(20),
+                    child: SizedBox(
+                      width: 96,
+                      height: 128,
+                      child: hasImage
+                          ? Image.file(File(imagePath), fit: BoxFit.cover)
+                          : const DecoratedBox(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [
+                                    Color(0xFFBBD8C6),
+                                    Color(0xFFE8E1CF),
+                                  ],
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                ),
+                              ),
+                              child: Icon(
+                                Icons.accessibility_new_rounded,
+                                size: 34,
+                              ),
+                            ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            series.name,
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                        ),
+                        PopupMenuButton<_SeriesCardAction>(
+                          onSelected: (action) {
+                            switch (action) {
+                              case _SeriesCardAction.edit:
+                                onEdit();
+                                break;
+                              case _SeriesCardAction.delete:
+                                onDelete();
+                                break;
+                            }
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(
+                              value: _SeriesCardAction.edit,
+                              child: Text('Edit series'),
+                            ),
+                            PopupMenuItem(
+                              value: _SeriesCardAction.delete,
+                              child: Text('Delete series'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Created ${MaterialLocalizations.of(context).formatShortDate(series.createdAt)}',
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        Chip(
+                          label: Text(
+                            series.baselineMetadata == null
+                                ? 'Baseline pending'
+                                : 'Baseline ready',
+                          ),
+                        ),
+                        if (series.baselineMetadata != null)
+                          Chip(
+                            label: Text(
+                              series.baselineMetadata!.cameraLens.toUpperCase(),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+enum _SeriesCardAction { edit, delete }

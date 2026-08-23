@@ -114,13 +114,41 @@ class PoseAlignmentEngine {
   static PoseAlignmentResult compare({
     required List<PoseLandmarkPoint> liveLandmarks,
     required List<PoseLandmarkPoint> referenceLandmarks,
+    bool mirrorReferenceHorizontally = false,
+  }) {
+    final directResult = _compareInternal(
+      liveLandmarks: liveLandmarks,
+      referenceLandmarks: referenceLandmarks,
+      mirrorReferenceHorizontally: false,
+    );
+    if (!mirrorReferenceHorizontally) {
+      return directResult;
+    }
+
+    final mirroredResult = _compareInternal(
+      liveLandmarks: liveLandmarks,
+      referenceLandmarks: referenceLandmarks,
+      mirrorReferenceHorizontally: true,
+    );
+    return mirroredResult.score > directResult.score
+        ? mirroredResult
+        : directResult;
+  }
+
+  static PoseAlignmentResult _compareInternal({
+    required List<PoseLandmarkPoint> liveLandmarks,
+    required List<PoseLandmarkPoint> referenceLandmarks,
+    required bool mirrorReferenceHorizontally,
   }) {
     if (liveLandmarks.isEmpty || referenceLandmarks.isEmpty) {
       return const PoseAlignmentResult.empty();
     }
 
     final live = _normalize(liveLandmarks);
-    final reference = _normalize(referenceLandmarks);
+    final reference = _normalize(
+      referenceLandmarks,
+      mirrorHorizontally: mirrorReferenceHorizontally,
+    );
 
     final commonTypes = live.points.keys.toSet().intersection(
       reference.points.keys.toSet(),
@@ -201,7 +229,10 @@ class PoseAlignmentEngine {
     );
   }
 
-  static _NormalizedPose _normalize(List<PoseLandmarkPoint> landmarks) {
+  static _NormalizedPose _normalize(
+    List<PoseLandmarkPoint> landmarks, {
+    bool mirrorHorizontally = false,
+  }) {
     final filteredLandmarks = landmarks.where((landmark) {
       return landmark.likelihood >= AppConstants.minimumLandmarkLikelihood / 2;
     }).toList();
@@ -236,7 +267,7 @@ class PoseAlignmentEngine {
     final normalized = <String, _Point2D>{};
     for (final landmark in source) {
       normalized[landmark.type] = _Point2D(
-        (landmark.x - anchor.x) / scale,
+        ((landmark.x - anchor.x) / scale) * (mirrorHorizontally ? -1 : 1),
         (landmark.y - anchor.y) / scale,
       );
     }

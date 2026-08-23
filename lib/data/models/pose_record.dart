@@ -9,40 +9,58 @@ class PoseRecord {
     this.id,
     required this.seriesId,
     required this.imagePath,
+    required this.label,
     required this.timestamp,
     required this.landmarks,
     required this.boundingBox,
     required this.anchorCenter,
+    required this.cameraLens,
+    required this.imageWidth,
+    required this.imageHeight,
     this.isReference = false,
   });
 
   final int? id;
   final int seriesId;
   final String imagePath;
+  final String label;
   final DateTime timestamp;
   final List<PoseLandmarkPoint> landmarks;
   final PoseBoundingBox boundingBox;
   final PosePoint anchorCenter;
+  final String cameraLens;
+  final int imageWidth;
+  final int imageHeight;
   final bool isReference;
+
+  bool get hasSourceDimensions => imageWidth > 0 && imageHeight > 0;
 
   PoseRecord copyWith({
     int? id,
     int? seriesId,
     String? imagePath,
+    String? label,
     DateTime? timestamp,
     List<PoseLandmarkPoint>? landmarks,
     PoseBoundingBox? boundingBox,
     PosePoint? anchorCenter,
+    String? cameraLens,
+    int? imageWidth,
+    int? imageHeight,
     bool? isReference,
   }) {
     return PoseRecord(
       id: id ?? this.id,
       seriesId: seriesId ?? this.seriesId,
       imagePath: imagePath ?? this.imagePath,
+      label: label ?? this.label,
       timestamp: timestamp ?? this.timestamp,
       landmarks: landmarks ?? this.landmarks,
       boundingBox: boundingBox ?? this.boundingBox,
       anchorCenter: anchorCenter ?? this.anchorCenter,
+      cameraLens: cameraLens ?? this.cameraLens,
+      imageWidth: imageWidth ?? this.imageWidth,
+      imageHeight: imageHeight ?? this.imageHeight,
       isReference: isReference ?? this.isReference,
     );
   }
@@ -61,6 +79,7 @@ class PoseRecord {
       id: map['id'] as int?,
       seriesId: map['series_id'] as int,
       imagePath: map['image_path'] as String,
+      label: map['label'] as String? ?? '',
       timestamp: DateTime.fromMillisecondsSinceEpoch(map['timestamp'] as int),
       landmarks: landmarksJson
           .map(
@@ -71,6 +90,9 @@ class PoseRecord {
           .toList(),
       boundingBox: PoseBoundingBox.fromJson(boundingBoxJson),
       anchorCenter: PosePoint.fromJson(anchorCenterJson),
+      cameraLens: map['camera_lens'] as String? ?? 'front',
+      imageWidth: map['image_width'] as int? ?? 0,
+      imageHeight: map['image_height'] as int? ?? 0,
       isReference: (map['is_reference'] as int? ?? 0) == 1,
     );
   }
@@ -80,12 +102,16 @@ class PoseRecord {
       'id': id,
       'series_id': seriesId,
       'image_path': imagePath,
+      'label': label,
       'timestamp': timestamp.millisecondsSinceEpoch,
       'landmarks_json': jsonEncode(
         landmarks.map((landmark) => landmark.toJson()).toList(),
       ),
       'bounding_box_json': jsonEncode(boundingBox.toJson()),
       'anchor_center_json': jsonEncode(anchorCenter.toJson()),
+      'camera_lens': cameraLens,
+      'image_width': imageWidth,
+      'image_height': imageHeight,
       'is_reference': isReference ? 1 : 0,
     };
   }

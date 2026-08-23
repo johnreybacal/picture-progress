@@ -1,6 +1,4 @@
-import 'dart:io';
 import 'dart:math';
-import 'dart:ui' as ui;
 
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
@@ -109,13 +107,18 @@ class TimelapseExportService {
       final sourcePath = await fileStorageService.resolveAbsolutePath(
         record.imagePath,
       );
-      final imageSize = await _readImageSize(sourcePath);
+      final imageSize = record.hasSourceDimensions
+          ? StoredImageDimensions(
+              width: record.imageWidth,
+              height: record.imageHeight,
+            )
+          : await fileStorageService.readImageDimensions(sourcePath);
       resolvedRecords.add(
         _ResolvedRecord(
           record: record,
           sourcePath: sourcePath,
-          imageWidth: imageSize.width,
-          imageHeight: imageSize.height,
+          imageWidth: imageSize.width.toDouble(),
+          imageHeight: imageSize.height.toDouble(),
         ),
       );
     }
@@ -177,14 +180,6 @@ class TimelapseExportService {
     }
 
     return framePlans;
-  }
-
-  Future<ui.Size> _readImageSize(String imagePath) async {
-    final bytes = await File(imagePath).readAsBytes();
-    final codec = await ui.instantiateImageCodec(bytes);
-    final frame = await codec.getNextFrame();
-
-    return ui.Size(frame.image.width.toDouble(), frame.image.height.toDouble());
   }
 
   Future<void> _runCommand(String command) async {

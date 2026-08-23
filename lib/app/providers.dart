@@ -77,6 +77,20 @@ class SeriesListController extends StateNotifier<AsyncValue<List<PoseSeries>>> {
     return series;
   }
 
+  Future<PoseSeries> renameSeries(PoseSeries series, String name) async {
+    await _ref.read(poseRepositoryProvider).updateSeriesName(series.id!, name);
+    final updatedSeries = await _ref
+        .read(poseRepositoryProvider)
+        .getSeries(series.id!);
+    await load();
+    return updatedSeries ?? series.copyWith(name: name);
+  }
+
+  Future<void> deleteSeries(PoseSeries series) async {
+    await _ref.read(poseRepositoryProvider).deleteSeries(series);
+    await load();
+  }
+
   Future<void> refresh() async {
     await load();
   }

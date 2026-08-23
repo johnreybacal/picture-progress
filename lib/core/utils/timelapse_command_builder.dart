@@ -25,13 +25,17 @@ class TimelapseCommandBuilder {
   const TimelapseCommandBuilder();
 
   String buildNormalizedFrameCommand({required ExportFramePlan framePlan}) {
-    final filter = [
+    final filter = buildCropAndScaleFilter(framePlan);
+
+    return '-y -i ${_quote(framePlan.sourcePath)} -vf "$filter" -q:v 2 ${_quote(framePlan.outputPath)}';
+  }
+
+  String buildCropAndScaleFilter(ExportFramePlan framePlan) {
+    return [
       'crop=${_format(framePlan.cropWidth)}:${_format(framePlan.cropHeight)}:${_format(framePlan.cropLeft)}:${_format(framePlan.cropTop)}',
       'scale=${AppConstants.exportWidth}:${AppConstants.exportHeight}:flags=lanczos',
       'setsar=1',
     ].join(',');
-
-    return '-y -i ${_quote(framePlan.sourcePath)} -vf "$filter" -q:v 2 ${_quote(framePlan.outputPath)}';
   }
 
   String buildMp4Command({
