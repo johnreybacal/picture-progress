@@ -628,8 +628,13 @@ class _CameraViewState extends ConsumerState<CameraView> {
                   if (shouldShowBaselineGuide)
                     IgnorePointer(
                       child: CustomPaint(
-                        painter: BaselineTemplatePainter(
+                        painter: BaselineGuidePainter(
                           baselineRecord: widget.baselineRecord!,
+                          liveLandmarks: _latestLandmarks,
+                          liveImageSize: _latestFrameSize,
+                          liveRotation: _latestFrameRotation,
+                          cameraLensDirection:
+                              controller.description.lensDirection,
                           opacity: settings.baselineOverlayOpacity,
                           mirrorHorizontally: mirrorBaselineGuide,
                         ),

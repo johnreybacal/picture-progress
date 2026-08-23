@@ -115,6 +115,7 @@ class _TimelapseExportViewState extends ConsumerState<TimelapseExportView> {
                                   record: selectedRecord,
                                   borderRadius: BorderRadius.circular(0),
                                   fit: BoxFit.contain,
+                                  showSkeletonOverlay: false,
                                 ),
                               ),
                             ),
@@ -368,56 +369,16 @@ class _TimelapseExportViewState extends ConsumerState<TimelapseExportView> {
 
   Future<void> _changeExportDirectory() async {
     final fileStorage = ref.read(fileStorageServiceProvider);
-    final defaultDirectory = await fileStorage.defaultExportDirectoryPath();
     if (!mounted) {
       return;
     }
-    final controller = TextEditingController(
-      text: _exportDirectoryPath ?? defaultDirectory,
-    );
-
-    final selectedPath = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Export directory'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Directory path',
-            hintText: 'C:/.../Picture Progress',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(defaultDirectory),
-            child: const Text('Use default'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-
+    final selectedPath = await fileStorage.pickExportDirectory();
     if (!mounted || selectedPath == null) {
       return;
     }
-
-    final resolvedPath = await fileStorage.resolveExportDirectoryPath(
-      selectedPath,
-    );
-    ref.read(appSettingsProvider.notifier).setExportDirectoryPath(resolvedPath);
-    if (!mounted) {
-      return;
-    }
+    ref.read(appSettingsProvider.notifier).setExportDirectoryPath(selectedPath);
     setState(() {
-      _exportDirectoryPath = resolvedPath;
+      _exportDirectoryPath = selectedPath;
     });
   }
 

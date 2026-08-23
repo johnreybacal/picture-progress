@@ -9,6 +9,7 @@ environment:
 dependencies:
   camera: ^0.12.0+2
   ffmpeg_kit_flutter_new: ^4.6.2
+  file_picker: ^12.0.0
   flutter:
     sdk: flutter
   flutter_riverpod: ^2.6.1

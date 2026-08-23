@@ -31,6 +31,26 @@ class PoseAlignmentResult {
 class PoseGeometry {
   const PoseGeometry._();
 
+  static PosePoint? midpointFor(
+    List<PoseLandmarkPoint> landmarks,
+    String firstType,
+    String secondType,
+  ) {
+    final source = _visibleLandmarks(landmarks);
+    if (source.isEmpty) {
+      return null;
+    }
+
+    final indexed = {for (final landmark in source) landmark.type: landmark};
+    final first = indexed[firstType];
+    final second = indexed[secondType];
+    if (first == null || second == null) {
+      return null;
+    }
+
+    return PosePoint(x: (first.x + second.x) / 2, y: (first.y + second.y) / 2);
+  }
+
   static PoseBoundingBox boundingBoxFor(List<PoseLandmarkPoint> landmarks) {
     final source = _visibleLandmarks(landmarks);
     if (source.isEmpty) {
@@ -74,6 +94,38 @@ class PoseGeometry {
     }
 
     return boundingBoxFor(source).center;
+  }
+
+  static double torsoLengthFor(List<PoseLandmarkPoint> landmarks) {
+    final shoulderMidpoint = midpointFor(
+      landmarks,
+      'leftShoulder',
+      'rightShoulder',
+    );
+    final hipMidpoint = midpointFor(landmarks, 'leftHip', 'rightHip');
+    if (shoulderMidpoint == null || hipMidpoint == null) {
+      return 0;
+    }
+
+    return sqrt(
+      pow(hipMidpoint.x - shoulderMidpoint.x, 2) +
+          pow(hipMidpoint.y - shoulderMidpoint.y, 2),
+    );
+  }
+
+  static double bodyScaleFor(List<PoseLandmarkPoint> landmarks) {
+    final source = _visibleLandmarks(landmarks);
+    if (source.isEmpty) {
+      return 0;
+    }
+
+    final torsoLength = torsoLengthFor(source);
+    if (torsoLength > 0) {
+      return torsoLength;
+    }
+
+    final boundingBox = boundingBoxFor(source);
+    return max(boundingBox.width, boundingBox.height);
   }
 
   static List<PoseLandmarkPoint> _visibleLandmarks(

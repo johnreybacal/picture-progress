@@ -26,13 +26,17 @@ class ExportFramePlan {
 class TimelapseCommandBuilder {
   const TimelapseCommandBuilder();
 
-  String buildNormalizedFrameCommand({required ExportFramePlan framePlan}) {
-    final filter = buildCropAndScaleFilter(framePlan);
+  String buildStabilizedFrameCommand({required ExportFramePlan framePlan}) {
+    final filter = buildStabilizedCropAndScaleFilter(framePlan);
 
     return '-y -i ${_quote(framePlan.sourcePath)} -vf "$filter" -q:v 2 ${_quote(framePlan.outputPath)}';
   }
 
-  String buildCropAndScaleFilter(ExportFramePlan framePlan) {
+  String buildNormalizedFrameCommand({required ExportFramePlan framePlan}) {
+    return buildStabilizedFrameCommand(framePlan: framePlan);
+  }
+
+  String buildStabilizedCropAndScaleFilter(ExportFramePlan framePlan) {
     final filters = <String>[];
     final preRotationFilter = _rotationFilter(framePlan.quarterTurns);
     if (preRotationFilter != null) {
@@ -44,6 +48,10 @@ class TimelapseCommandBuilder {
       'setsar=1',
     ]);
     return filters.join(',');
+  }
+
+  String buildCropAndScaleFilter(ExportFramePlan framePlan) {
+    return buildStabilizedCropAndScaleFilter(framePlan);
   }
 
   String buildMp4Command({

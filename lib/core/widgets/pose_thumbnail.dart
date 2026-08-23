@@ -14,11 +14,13 @@ class PoseThumbnail extends ConsumerWidget {
     required this.record,
     this.borderRadius = const BorderRadius.all(Radius.circular(18)),
     this.fit = BoxFit.cover,
+    this.showSkeletonOverlay = true,
   });
 
   final PoseRecord record;
   final BorderRadius borderRadius;
   final BoxFit fit;
+  final bool showSkeletonOverlay;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -50,18 +52,19 @@ class PoseThumbnail extends ConsumerWidget {
             fit: StackFit.expand,
             children: [
               Image.file(File(data.absolutePath), fit: BoxFit.fill),
-              IgnorePointer(
-                child: CustomPaint(
-                  painter: StoredPoseSkeletonPainter(
-                    landmarks: record.landmarks,
-                    fit: BoxFit.fill,
-                    imageSize: Size(
-                      data.imageWidth.toDouble(),
-                      data.imageHeight.toDouble(),
+              if (showSkeletonOverlay)
+                IgnorePointer(
+                  child: CustomPaint(
+                    painter: StoredPoseSkeletonPainter(
+                      landmarks: record.landmarks,
+                      fit: BoxFit.fill,
+                      imageSize: Size(
+                        data.imageWidth.toDouble(),
+                        data.imageHeight.toDouble(),
+                      ),
                     ),
                   ),
                 ),
-              ),
             ],
           ),
         );

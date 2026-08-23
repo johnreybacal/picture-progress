@@ -2,12 +2,16 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 class FileStorageService {
   FileStorageService() : _uuid = const Uuid();
+
+  static const String _androidPublicExportDirectory =
+      '/storage/emulated/0/Picture Progress';
 
   final Uuid _uuid;
 
@@ -85,12 +89,20 @@ class FileStorageService {
   }
 
   Future<String> defaultExportDirectoryPath() async {
+    if (Platform.isAndroid) {
+      final publicDirectory = Directory(_androidPublicExportDirectory);
+      try {
+        await publicDirectory.create(recursive: true);
+        return publicDirectory.path;
+      } catch (_) {}
+    }
+
     final baseDirectory = await _resolveDefaultExportBaseDirectory();
-    final exportDirectory = Directory(
+    final fallbackDirectory = Directory(
       path.join(baseDirectory.path, 'Picture Progress'),
     );
-    await exportDirectory.create(recursive: true);
-    return exportDirectory.path;
+    await fallbackDirectory.create(recursive: true);
+    return fallbackDirectory.path;
   }
 
   Future<String> resolveExportDirectoryPath(String? preferredPath) async {
@@ -102,6 +114,17 @@ class FileStorageService {
     }
 
     return defaultExportDirectoryPath();
+  }
+
+  Future<String?> pickExportDirectory() async {
+    final selectedPath = await FilePicker.getDirectoryPath(
+      dialogTitle: 'Select export directory',
+    );
+    if (selectedPath == null || selectedPath.trim().isEmpty) {
+      return null;
+    }
+
+    return resolveExportDirectoryPath(selectedPath);
   }
 
   Future<ExportWorkspace> createExportWorkspace(

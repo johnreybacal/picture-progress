@@ -5,6 +5,7 @@ import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:path/path.dart' as path;
 
 import '../../core/constants/app_constants.dart';
+import '../../core/utils/pose_alignment_engine.dart';
 import '../../core/utils/timelapse_command_builder.dart';
 import '../models/pose_record.dart';
 import '../models/pose_series.dart';
@@ -74,7 +75,7 @@ class TimelapseExportService {
 
       for (final framePlan in framePlans) {
         await _runCommand(
-          commandBuilder.buildNormalizedFrameCommand(framePlan: framePlan),
+          commandBuilder.buildStabilizedFrameCommand(framePlan: framePlan),
         );
       }
 
@@ -133,22 +134,6 @@ class TimelapseExportService {
       );
     }
 
-    final bodyHeights = resolvedRecords
-        .map(
-          (item) => item.record
-              .displayBoundingBox(
-                rawWidth: item.imageWidth.round(),
-                rawHeight: item.imageHeight.round(),
-              )
-              .height,
-        )
-        .where((value) => value > 0)
-        .toList();
-    final referenceBodyHeight = max(
-      240.0,
-      (bodyHeights.isEmpty ? 1080.0 : bodyHeights.reduce(max)) *
-          AppConstants.exportBodyPaddingMultiplier,
-    );
     final aspectRatio = AppConstants.exportWidth / AppConstants.exportHeight;
 
     final framePlans = <ExportFramePlan>[];
@@ -169,8 +154,19 @@ class TimelapseExportService {
         rawWidth: item.imageWidth.round(),
         rawHeight: item.imageHeight.round(),
       );
+      final displayLandmarks = item.record.displayLandmarks(
+        rawWidth: item.imageWidth.round(),
+        rawHeight: item.imageHeight.round(),
+      );
+      final recordBodyScale = max(
+        PoseGeometry.bodyScaleFor(displayLandmarks),
+        1.0,
+      );
 
-      var cropHeight = min(referenceBodyHeight, displayHeight);
+      var cropHeight = min(
+        max(240.0, recordBodyScale * AppConstants.exportBodyPaddingMultiplier),
+        displayHeight,
+      );
       var cropWidth = cropHeight * aspectRatio;
 
       if (cropWidth > displayWidth) {
