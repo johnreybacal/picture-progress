@@ -33,17 +33,28 @@ class PoseThumbnail extends ConsumerWidget {
         }
 
         final data = snapshot.data!;
-        return ClipRRect(
-          borderRadius: borderRadius,
+        final quarterTurns = record.captureOrientation.quarterTurnsForDisplay(
+          rawWidth: data.imageWidth,
+          rawHeight: data.imageHeight,
+        );
+        final displayWidth = quarterTurns.isOdd
+            ? data.imageHeight.toDouble()
+            : data.imageWidth.toDouble();
+        final displayHeight = quarterTurns.isOdd
+            ? data.imageWidth.toDouble()
+            : data.imageHeight.toDouble();
+        final rawFrame = SizedBox(
+          width: data.imageWidth.toDouble(),
+          height: data.imageHeight.toDouble(),
           child: Stack(
             fit: StackFit.expand,
             children: [
-              Image.file(File(data.absolutePath), fit: fit),
+              Image.file(File(data.absolutePath), fit: BoxFit.fill),
               IgnorePointer(
                 child: CustomPaint(
                   painter: StoredPoseSkeletonPainter(
                     landmarks: record.landmarks,
-                    fit: fit,
+                    fit: BoxFit.fill,
                     imageSize: Size(
                       data.imageWidth.toDouble(),
                       data.imageHeight.toDouble(),
@@ -52,6 +63,22 @@ class PoseThumbnail extends ConsumerWidget {
                 ),
               ),
             ],
+          ),
+        );
+
+        return ClipRRect(
+          borderRadius: borderRadius,
+          child: SizedBox.expand(
+            child: FittedBox(
+              fit: fit,
+              child: SizedBox(
+                width: displayWidth,
+                height: displayHeight,
+                child: quarterTurns == 0
+                    ? rawFrame
+                    : RotatedBox(quarterTurns: quarterTurns, child: rawFrame),
+              ),
+            ),
           ),
         );
       },

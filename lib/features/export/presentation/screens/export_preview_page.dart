@@ -1,32 +1,67 @@
-import 'dart:io';
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../app/providers.dart';
+import '../../../../core/constants/app_constants.dart';
+import '../../../../core/widgets/pose_thumbnail.dart';
 import '../../../../data/models/pose_record.dart';
 import '../../../../data/models/pose_series.dart';
 
-class ExportPreviewPage extends ConsumerStatefulWidget {
-  const ExportPreviewPage({super.key, required this.series});
+class TimelapseExportView extends ConsumerStatefulWidget {
+  const TimelapseExportView({super.key, required this.series});
 
   final PoseSeries series;
 
   @override
-  ConsumerState<ExportPreviewPage> createState() => _ExportPreviewPageState();
+  ConsumerState<TimelapseExportView> createState() =>
+      _TimelapseExportViewState();
 }
 
-class _ExportPreviewPageState extends ConsumerState<ExportPreviewPage> {
+class ExportPreviewPage extends TimelapseExportView {
+  const ExportPreviewPage({super.key, required super.series});
+}
+
+class _TimelapseExportViewState extends ConsumerState<TimelapseExportView> {
+  static const List<double> _speedPresets = [0.5, 1, 2, 5];
+
+  Timer? _playbackTimer;
   int _selectedIndex = 0;
+  int _selectedSpeedIndex = 1;
+  bool _isPlaying = false;
+  bool _loopPlayback = true;
   bool _exporting = false;
+  bool _loadingExportDirectory = true;
+  String? _exportDirectoryPath;
+
+  double get _speedMultiplier => _speedPresets[_selectedSpeedIndex];
+
+  int get _resolvedFps =>
+      max(1, (AppConstants.defaultTimelapseFps * _speedMultiplier).round());
+
+  Duration get _frameInterval =>
+      Duration(milliseconds: max(40, (1000 / _resolvedFps).round()));
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadExportDirectory());
+  }
+
+  @override
+  void dispose() {
+    _stopPlayback(updateState: false);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final recordsAsync = ref.watch(seriesRecordsProvider(widget.series.id!));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Timelapse Preview')),
+      appBar: AppBar(title: const Text('Timelapse export')),
       body: SafeArea(
         child: recordsAsync.when(
           data: (records) {
@@ -50,6 +85,7 @@ class _ExportPreviewPageState extends ConsumerState<ExportPreviewPage> {
               orderedRecords.length - 1,
             );
             final selectedRecord = orderedRecords[selectedIndex];
+            final currentExportDirectory = _exportDirectoryPath ?? 'Loading...';
 
             return Stack(
               children: [
@@ -68,39 +104,55 @@ class _ExportPreviewPageState extends ConsumerState<ExportPreviewPage> {
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              'Scrub through captures in chronological order before generating the stabilized export.',
+                              'Preview the stabilized image sequence at the same speed and loop setting that will drive the final export.',
                             ),
                             const SizedBox(height: 16),
-                            FutureBuilder<String>(
-                              future: ref
-                                  .read(fileStorageServiceProvider)
-                                  .resolveAbsolutePath(
-                                    selectedRecord.imagePath,
-                                  ),
-                              builder: (context, snapshot) {
-                                if (!snapshot.hasData ||
-                                    snapshot.data!.isEmpty) {
-                                  return const AspectRatio(
-                                    aspectRatio: 9 / 16,
-                                    child: Center(
-                                      child: CircularProgressIndicator(),
-                                    ),
-                                  );
-                                }
-
-                                return ClipRRect(
-                                  borderRadius: BorderRadius.circular(22),
-                                  child: AspectRatio(
-                                    aspectRatio: 9 / 16,
-                                    child: Image.file(
-                                      File(snapshot.data!),
-                                      fit: BoxFit.cover,
-                                    ),
-                                  ),
-                                );
-                              },
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(22),
+                              child: AspectRatio(
+                                aspectRatio: selectedRecord.displayAspectRatio,
+                                child: PoseThumbnail(
+                                  record: selectedRecord,
+                                  borderRadius: BorderRadius.circular(0),
+                                  fit: BoxFit.contain,
+                                ),
+                              ),
                             ),
                             const SizedBox(height: 16),
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 12,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                FilledButton.icon(
+                                  onPressed: orderedRecords.length < 2
+                                      ? null
+                                      : () => _togglePlayback(orderedRecords),
+                                  icon: Icon(
+                                    _isPlaying
+                                        ? Icons.pause_rounded
+                                        : Icons.play_arrow_rounded,
+                                  ),
+                                  label: Text(
+                                    _isPlaying
+                                        ? 'Pause preview'
+                                        : 'Play preview',
+                                  ),
+                                ),
+                                FilterChip(
+                                  selected: _loopPlayback,
+                                  onSelected: (value) {
+                                    setState(() {
+                                      _loopPlayback = value;
+                                    });
+                                  },
+                                  label: const Text('Loop playback'),
+                                ),
+                                Chip(label: Text('${_speedMultiplier}x')),
+                                Chip(label: Text('$_resolvedFps FPS')),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
                             Text(
                               'Frame ${selectedIndex + 1} of ${orderedRecords.length}',
                               style: Theme.of(context).textTheme.titleMedium,
@@ -134,19 +186,122 @@ class _ExportPreviewPageState extends ConsumerState<ExportPreviewPage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Export',
+                              'Playback speed',
                               style: Theme.of(context).textTheme.titleLarge,
                             ),
                             const SizedBox(height: 6),
                             const Text(
-                              'Each frame is re-centered with the saved anchor point, cropped to a consistent body box, then stitched into the final timelapse.',
+                              'This speed controls the interactive preview timing and the final MP4/GIF framerate.',
+                            ),
+                            const SizedBox(height: 16),
+                            Slider(
+                              value: _selectedSpeedIndex.toDouble(),
+                              min: 0,
+                              max: (_speedPresets.length - 1).toDouble(),
+                              divisions: _speedPresets.length - 1,
+                              label: '${_speedMultiplier}x',
+                              onChanged: (value) {
+                                setState(() {
+                                  _selectedSpeedIndex = value.round();
+                                });
+                                _restartPlaybackIfNeeded(orderedRecords);
+                              },
+                            ),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: _speedPresets
+                                  .map(
+                                    (speed) => Text(
+                                      '${speed}x',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelMedium,
+                                    ),
+                                  )
+                                  .toList(growable: false),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Export destination',
+                              style: Theme.of(context).textTheme.titleLarge,
+                            ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              'Exports default to the Picture Progress folder. You can keep that directory or point the export to another writable path.',
+                            ),
+                            const SizedBox(height: 12),
+                            DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(12),
+                                child: Text(currentExportDirectory),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: _loadingExportDirectory
+                                        ? null
+                                        : _changeExportDirectory,
+                                    icon: const Icon(Icons.folder_open_rounded),
+                                    label: const Text('Change directory'),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: TextButton.icon(
+                                    onPressed: _loadingExportDirectory
+                                        ? null
+                                        : _useDefaultExportDirectory,
+                                    icon: const Icon(Icons.restart_alt_rounded),
+                                    label: const Text('Use default'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Export',
+                              style: Theme.of(context).textTheme.titleLarge,
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Each frame is re-centered from the saved shoulder/hip midpoint, orientation-corrected if needed, cropped to a consistent body box, and rendered at $_resolvedFps FPS.',
                             ),
                             const SizedBox(height: 16),
                             Row(
                               children: [
                                 Expanded(
                                   child: FilledButton.icon(
-                                    onPressed: _exporting
+                                    onPressed:
+                                        _exporting || _loadingExportDirectory
                                         ? null
                                         : () => _exportMp4(orderedRecords),
                                     icon: const Icon(
@@ -158,7 +313,8 @@ class _ExportPreviewPageState extends ConsumerState<ExportPreviewPage> {
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: OutlinedButton.icon(
-                                    onPressed: _exporting
+                                    onPressed:
+                                        _exporting || _loadingExportDirectory
                                         ? null
                                         : () => _exportGif(orderedRecords),
                                     icon: const Icon(Icons.gif_box_outlined),
@@ -195,11 +351,151 @@ class _ExportPreviewPageState extends ConsumerState<ExportPreviewPage> {
     );
   }
 
+  Future<void> _loadExportDirectory() async {
+    final settings = ref.read(appSettingsProvider);
+    final fileStorage = ref.read(fileStorageServiceProvider);
+    final exportDirectory = settings.exportDirectoryPath.isNotEmpty
+        ? settings.exportDirectoryPath
+        : await fileStorage.defaultExportDirectoryPath();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _exportDirectoryPath = exportDirectory;
+      _loadingExportDirectory = false;
+    });
+  }
+
+  Future<void> _changeExportDirectory() async {
+    final fileStorage = ref.read(fileStorageServiceProvider);
+    final defaultDirectory = await fileStorage.defaultExportDirectoryPath();
+    if (!mounted) {
+      return;
+    }
+    final controller = TextEditingController(
+      text: _exportDirectoryPath ?? defaultDirectory,
+    );
+
+    final selectedPath = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Export directory'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Directory path',
+            hintText: 'C:/.../Picture Progress',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(defaultDirectory),
+            child: const Text('Use default'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted || selectedPath == null) {
+      return;
+    }
+
+    final resolvedPath = await fileStorage.resolveExportDirectoryPath(
+      selectedPath,
+    );
+    ref.read(appSettingsProvider.notifier).setExportDirectoryPath(resolvedPath);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _exportDirectoryPath = resolvedPath;
+    });
+  }
+
+  Future<void> _useDefaultExportDirectory() async {
+    final fileStorage = ref.read(fileStorageServiceProvider);
+    final defaultPath = await fileStorage.defaultExportDirectoryPath();
+    ref.read(appSettingsProvider.notifier).setExportDirectoryPath(defaultPath);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _exportDirectoryPath = defaultPath;
+    });
+  }
+
+  void _togglePlayback(List<PoseRecord> records) {
+    if (_isPlaying) {
+      _stopPlayback();
+      return;
+    }
+    _startPlayback(records.length);
+  }
+
+  void _startPlayback(int frameCount) {
+    if (frameCount < 2) {
+      return;
+    }
+
+    _playbackTimer?.cancel();
+    setState(() {
+      _isPlaying = true;
+    });
+    _playbackTimer = Timer.periodic(_frameInterval, (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        if (_selectedIndex >= frameCount - 1) {
+          if (_loopPlayback) {
+            _selectedIndex = 0;
+            return;
+          }
+          _stopPlayback(updateState: false);
+          return;
+        }
+        _selectedIndex += 1;
+      });
+    });
+  }
+
+  void _restartPlaybackIfNeeded(List<PoseRecord> records) {
+    if (_isPlaying) {
+      _startPlayback(records.length);
+    }
+  }
+
+  void _stopPlayback({bool updateState = true}) {
+    _playbackTimer?.cancel();
+    _playbackTimer = null;
+    if (updateState && mounted) {
+      setState(() {
+        _isPlaying = false;
+      });
+      return;
+    }
+    _isPlaying = false;
+  }
+
   Future<void> _exportMp4(List<PoseRecord> records) async {
     await _runExport(
       () => ref
           .read(timelapseExportServiceProvider)
-          .exportMp4(series: widget.series, records: records),
+          .exportMp4(
+            series: widget.series,
+            records: records,
+            fps: _resolvedFps,
+            exportDirectoryPath: _exportDirectoryPath,
+          ),
     );
   }
 
@@ -207,7 +503,12 @@ class _ExportPreviewPageState extends ConsumerState<ExportPreviewPage> {
     await _runExport(
       () => ref
           .read(timelapseExportServiceProvider)
-          .exportGif(series: widget.series, records: records),
+          .exportGif(
+            series: widget.series,
+            records: records,
+            fps: _resolvedFps,
+            exportDirectoryPath: _exportDirectoryPath,
+          ),
     );
   }
 

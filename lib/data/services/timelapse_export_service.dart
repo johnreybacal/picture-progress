@@ -23,12 +23,14 @@ class TimelapseExportService {
     required PoseSeries series,
     required List<PoseRecord> records,
     int fps = 10,
+    String? exportDirectoryPath,
   }) async {
     return _export(
       series: series,
       records: records,
       fps: fps,
       format: _ExportFormat.mp4,
+      exportDirectoryPath: exportDirectoryPath,
     );
   }
 
@@ -36,12 +38,14 @@ class TimelapseExportService {
     required PoseSeries series,
     required List<PoseRecord> records,
     int fps = 8,
+    String? exportDirectoryPath,
   }) async {
     return _export(
       series: series,
       records: records,
       fps: fps,
       format: _ExportFormat.gif,
+      exportDirectoryPath: exportDirectoryPath,
     );
   }
 
@@ -50,6 +54,7 @@ class TimelapseExportService {
     required List<PoseRecord> records,
     required int fps,
     required _ExportFormat format,
+    String? exportDirectoryPath,
   }) async {
     final orderedRecords = [...records]
       ..sort((first, second) => first.timestamp.compareTo(second.timestamp));
@@ -59,43 +64,48 @@ class TimelapseExportService {
 
     final workspace = await fileStorageService.createExportWorkspace(
       series.id ?? 0,
+      exportDirectoryPath: exportDirectoryPath,
     );
-    final framePlans = await _buildFramePlans(
-      orderedRecords,
-      workspace.framesDirectory.path,
-    );
-
-    for (final framePlan in framePlans) {
-      await _runCommand(
-        commandBuilder.buildNormalizedFrameCommand(framePlan: framePlan),
+    try {
+      final framePlans = await _buildFramePlans(
+        orderedRecords,
+        workspace.framesDirectory.path,
       );
+
+      for (final framePlan in framePlans) {
+        await _runCommand(
+          commandBuilder.buildNormalizedFrameCommand(framePlan: framePlan),
+        );
+      }
+
+      final seriesSlug = _slugify(series.name);
+      final extension = format == _ExportFormat.mp4 ? 'mp4' : 'gif';
+      final outputPath = path.join(
+        workspace.outputDirectory.path,
+        '${seriesSlug}_${DateTime.now().millisecondsSinceEpoch}.$extension',
+      );
+      final framesPattern = path.join(
+        workspace.framesDirectory.path,
+        'frame_%05d.jpg',
+      );
+
+      final renderCommand = format == _ExportFormat.mp4
+          ? commandBuilder.buildMp4Command(
+              framesPattern: framesPattern,
+              outputPath: outputPath,
+              fps: fps,
+            )
+          : commandBuilder.buildGifCommand(
+              framesPattern: framesPattern,
+              outputPath: outputPath,
+              fps: fps,
+            );
+
+      await _runCommand(renderCommand);
+      return outputPath;
+    } finally {
+      await fileStorageService.deleteDirectory(workspace.rootDirectory.path);
     }
-
-    final seriesSlug = _slugify(series.name);
-    final extension = format == _ExportFormat.mp4 ? 'mp4' : 'gif';
-    final outputPath = path.join(
-      workspace.rootDirectory.path,
-      '$seriesSlug.$extension',
-    );
-    final framesPattern = path.join(
-      workspace.framesDirectory.path,
-      'frame_%05d.jpg',
-    );
-
-    final renderCommand = format == _ExportFormat.mp4
-        ? commandBuilder.buildMp4Command(
-            framesPattern: framesPattern,
-            outputPath: outputPath,
-            fps: fps,
-          )
-        : commandBuilder.buildGifCommand(
-            framesPattern: framesPattern,
-            outputPath: outputPath,
-            fps: fps,
-          );
-
-    await _runCommand(renderCommand);
-    return outputPath;
   }
 
   Future<List<ExportFramePlan>> _buildFramePlans(
@@ -124,7 +134,14 @@ class TimelapseExportService {
     }
 
     final bodyHeights = resolvedRecords
-        .map((item) => item.record.boundingBox.height)
+        .map(
+          (item) => item.record
+              .displayBoundingBox(
+                rawWidth: item.imageWidth.round(),
+                rawHeight: item.imageHeight.round(),
+              )
+              .height,
+        )
         .where((value) => value > 0)
         .toList();
     final referenceBodyHeight = max(
@@ -137,29 +154,43 @@ class TimelapseExportService {
     final framePlans = <ExportFramePlan>[];
     for (var index = 0; index < resolvedRecords.length; index++) {
       final item = resolvedRecords[index];
-      var cropHeight = min(referenceBodyHeight, item.imageHeight);
+      final quarterTurns = item.record.captureOrientation
+          .quarterTurnsForDisplay(
+            rawWidth: item.imageWidth.round(),
+            rawHeight: item.imageHeight.round(),
+          );
+      final displayWidth = quarterTurns.isOdd
+          ? item.imageHeight
+          : item.imageWidth;
+      final displayHeight = quarterTurns.isOdd
+          ? item.imageWidth
+          : item.imageHeight;
+      final displayAnchor = item.record.displayAnchorCenter(
+        rawWidth: item.imageWidth.round(),
+        rawHeight: item.imageHeight.round(),
+      );
+
+      var cropHeight = min(referenceBodyHeight, displayHeight);
       var cropWidth = cropHeight * aspectRatio;
 
-      if (cropWidth > item.imageWidth) {
-        cropWidth = item.imageWidth;
+      if (cropWidth > displayWidth) {
+        cropWidth = displayWidth;
         cropHeight = cropWidth / aspectRatio;
       }
 
-      if (cropHeight > item.imageHeight) {
-        cropHeight = item.imageHeight;
+      if (cropHeight > displayHeight) {
+        cropHeight = displayHeight;
         cropWidth = cropHeight * aspectRatio;
       }
 
-      final maxLeft = max(0.0, item.imageWidth - cropWidth);
-      final maxTop = max(0.0, item.imageHeight - cropHeight);
+      final maxLeft = max(0.0, displayWidth - cropWidth);
+      final maxTop = max(0.0, displayHeight - cropHeight);
       final cropLeft =
-          (item.record.anchorCenter.x -
-                  (AppConstants.targetAnchorX * cropWidth))
+          (displayAnchor.x - (AppConstants.targetAnchorX * cropWidth))
               .clamp(0.0, maxLeft)
               .toDouble();
       final cropTop =
-          (item.record.anchorCenter.y -
-                  (AppConstants.targetAnchorY * cropHeight))
+          (displayAnchor.y - (AppConstants.targetAnchorY * cropHeight))
               .clamp(0.0, maxTop)
               .toDouble();
 
@@ -171,6 +202,7 @@ class TimelapseExportService {
             framesDirectoryPath,
             'frame_${(index + 1).toString().padLeft(5, '0')}.jpg',
           ),
+          quarterTurns: quarterTurns,
           cropLeft: cropLeft,
           cropTop: cropTop,
           cropWidth: cropWidth,

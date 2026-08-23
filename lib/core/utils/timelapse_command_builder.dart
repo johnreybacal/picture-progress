@@ -6,6 +6,7 @@ class ExportFramePlan {
     required this.record,
     required this.sourcePath,
     required this.outputPath,
+    required this.quarterTurns,
     required this.cropLeft,
     required this.cropTop,
     required this.cropWidth,
@@ -15,6 +16,7 @@ class ExportFramePlan {
   final PoseRecord record;
   final String sourcePath;
   final String outputPath;
+  final int quarterTurns;
   final double cropLeft;
   final double cropTop;
   final double cropWidth;
@@ -31,11 +33,17 @@ class TimelapseCommandBuilder {
   }
 
   String buildCropAndScaleFilter(ExportFramePlan framePlan) {
-    return [
+    final filters = <String>[];
+    final preRotationFilter = _rotationFilter(framePlan.quarterTurns);
+    if (preRotationFilter != null) {
+      filters.add(preRotationFilter);
+    }
+    filters.addAll([
       'crop=${_format(framePlan.cropWidth)}:${_format(framePlan.cropHeight)}:${_format(framePlan.cropLeft)}:${_format(framePlan.cropTop)}',
       'scale=${AppConstants.exportWidth}:${AppConstants.exportHeight}:flags=lanczos',
       'setsar=1',
-    ].join(',');
+    ]);
+    return filters.join(',');
   }
 
   String buildMp4Command({
@@ -65,5 +73,16 @@ class TimelapseCommandBuilder {
 
   String _format(double value) {
     return value.toStringAsFixed(2);
+  }
+
+  String? _rotationFilter(int quarterTurns) {
+    switch (quarterTurns % 4) {
+      case 1:
+        return 'transpose=clock';
+      case 3:
+        return 'transpose=cclock';
+      default:
+        return null;
+    }
   }
 }

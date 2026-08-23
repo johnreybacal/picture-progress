@@ -1,9 +1,9 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../app/providers.dart';
+import '../../../../core/widgets/pose_thumbnail.dart';
+import '../../../../data/models/pose_record.dart';
 import '../../../../data/models/pose_series.dart';
 import '../../../capture/presentation/screens/camera_view.dart';
 import '../../../settings/presentation/screens/app_settings_view.dart';
@@ -236,6 +236,7 @@ class _SeriesCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final recordsAsync = ref.watch(seriesRecordsProvider(series.id!));
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(24),
@@ -250,39 +251,13 @@ class _SeriesCard extends ConsumerWidget {
           padding: const EdgeInsets.all(14),
           child: Row(
             children: [
-              FutureBuilder<String>(
-                future: ref
-                    .read(fileStorageServiceProvider)
-                    .resolveAbsolutePath(series.thumbnailPath),
-                builder: (context, snapshot) {
-                  final imagePath = snapshot.data;
-                  final hasImage = imagePath != null && imagePath.isNotEmpty;
-                  return ClipRRect(
-                    borderRadius: BorderRadius.circular(20),
-                    child: SizedBox(
-                      width: 96,
-                      height: 128,
-                      child: hasImage
-                          ? Image.file(File(imagePath), fit: BoxFit.cover)
-                          : const DecoratedBox(
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [
-                                    Color(0xFFBBD8C6),
-                                    Color(0xFFE8E1CF),
-                                  ],
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                ),
-                              ),
-                              child: Icon(
-                                Icons.accessibility_new_rounded,
-                                size: 34,
-                              ),
-                            ),
-                    ),
-                  );
-                },
+              SizedBox(
+                width: 96,
+                height: 128,
+                child: _SeriesPreview(
+                  recordsAsync: recordsAsync,
+                  series: series,
+                ),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -352,6 +327,44 @@ class _SeriesCard extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _SeriesPreview extends StatelessWidget {
+  const _SeriesPreview({required this.recordsAsync, required this.series});
+
+  final AsyncValue<List<PoseRecord>> recordsAsync;
+  final PoseSeries series;
+
+  @override
+  Widget build(BuildContext context) {
+    final thumbnailRecord = recordsAsync.maybeWhen(
+      data: (records) {
+        for (final record in records) {
+          if (record.imagePath == series.thumbnailPath) {
+            return record;
+          }
+        }
+        return records.isEmpty ? null : records.last;
+      },
+      orElse: () => null,
+    );
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: thumbnailRecord == null
+          ? const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFFBBD8C6), Color(0xFFE8E1CF)],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                ),
+              ),
+              child: Icon(Icons.accessibility_new_rounded, size: 34),
+            )
+          : PoseThumbnail(record: thumbnailRecord),
     );
   }
 }

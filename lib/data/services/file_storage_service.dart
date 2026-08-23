@@ -84,12 +84,38 @@ class FileStorageService {
     }
   }
 
-  Future<ExportWorkspace> createExportWorkspace(int seriesId) async {
-    final documentsDirectory = await getApplicationDocumentsDirectory();
+  Future<String> defaultExportDirectoryPath() async {
+    final baseDirectory = await _resolveDefaultExportBaseDirectory();
+    final exportDirectory = Directory(
+      path.join(baseDirectory.path, 'Picture Progress'),
+    );
+    await exportDirectory.create(recursive: true);
+    return exportDirectory.path;
+  }
+
+  Future<String> resolveExportDirectoryPath(String? preferredPath) async {
+    final trimmed = preferredPath?.trim() ?? '';
+    if (trimmed.isNotEmpty) {
+      final directory = Directory(trimmed);
+      await directory.create(recursive: true);
+      return directory.path;
+    }
+
+    return defaultExportDirectoryPath();
+  }
+
+  Future<ExportWorkspace> createExportWorkspace(
+    int seriesId, {
+    String? exportDirectoryPath,
+  }) async {
+    final outputDirectory = Directory(
+      await resolveExportDirectoryPath(exportDirectoryPath),
+    );
+    await outputDirectory.create(recursive: true);
     final rootDirectory = Directory(
       path.join(
-        documentsDirectory.path,
-        'exports',
+        outputDirectory.path,
+        '.picture_progress_tmp',
         'series_$seriesId',
         DateTime.now().millisecondsSinceEpoch.toString(),
       ),
@@ -102,7 +128,30 @@ class FileStorageService {
     return ExportWorkspace(
       rootDirectory: rootDirectory,
       framesDirectory: framesDirectory,
+      outputDirectory: outputDirectory,
     );
+  }
+
+  Future<void> deleteDirectory(String absolutePath) async {
+    if (absolutePath.isEmpty) {
+      return;
+    }
+
+    final directory = Directory(absolutePath);
+    if (await directory.exists()) {
+      await directory.delete(recursive: true);
+    }
+  }
+
+  Future<Directory> _resolveDefaultExportBaseDirectory() async {
+    if (Platform.isAndroid) {
+      final externalDirectory = await getExternalStorageDirectory();
+      if (externalDirectory != null) {
+        return externalDirectory;
+      }
+    }
+
+    return getApplicationDocumentsDirectory();
   }
 }
 
@@ -117,8 +166,10 @@ class ExportWorkspace {
   const ExportWorkspace({
     required this.rootDirectory,
     required this.framesDirectory,
+    required this.outputDirectory,
   });
 
   final Directory rootDirectory;
   final Directory framesDirectory;
+  final Directory outputDirectory;
 }

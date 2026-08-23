@@ -120,4 +120,16 @@ class AppSettingsController extends StateNotifier<AppSettings> {
   void setAutoCaptureDelay(Duration delay) {
     state = state.copyWith(autoCaptureDelay: delay);
   }
+
+  void setBaselineOverlayEnabled(bool enabled) {
+    state = state.copyWith(showBaselineOverlay: enabled);
+  }
+
+  void setBaselineOverlayOpacity(double opacity) {
+    state = state.copyWith(baselineOverlayOpacity: opacity);
+  }
+
+  void setExportDirectoryPath(String exportDirectoryPath) {
+    state = state.copyWith(exportDirectoryPath: exportDirectoryPath.trim());
+  }
 }

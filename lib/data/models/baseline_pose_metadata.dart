@@ -1,3 +1,4 @@
+import 'capture_orientation.dart';
 import 'pose_bounding_box.dart';
 import 'pose_point.dart';
 
@@ -9,6 +10,7 @@ class BaselinePoseMetadata {
     required this.anchorCenter,
     required this.boundingBox,
     required this.cameraLens,
+    required this.captureOrientation,
   });
 
   final int recordId;
@@ -17,6 +19,7 @@ class BaselinePoseMetadata {
   final PosePoint anchorCenter;
   final PoseBoundingBox boundingBox;
   final String cameraLens;
+  final CaptureOrientation captureOrientation;
 
   factory BaselinePoseMetadata.fromJson(Map<String, dynamic> json) {
     return BaselinePoseMetadata(
@@ -34,6 +37,9 @@ class BaselinePoseMetadata {
         Map<String, dynamic>.from(json['boundingBox'] as Map<dynamic, dynamic>),
       ),
       cameraLens: json['cameraLens'] as String,
+      captureOrientation: CaptureOrientation.fromStorage(
+        json['captureOrientation'] as String?,
+      ),
     );
   }
 
@@ -45,6 +51,7 @@ class BaselinePoseMetadata {
       'anchorCenter': anchorCenter.toJson(),
       'boundingBox': boundingBox.toJson(),
       'cameraLens': cameraLens,
+      'captureOrientation': captureOrientation.storageValue,
     };
   }
 }

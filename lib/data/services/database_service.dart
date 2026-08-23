@@ -23,7 +23,7 @@ class DatabaseService {
 
     return openDatabase(
       databasePath,
-      version: 2,
+      version: 3,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
       },
@@ -46,6 +46,17 @@ class DatabaseService {
           );
           await db.execute(
             'ALTER TABLE pose_records ADD COLUMN image_height INTEGER NOT NULL DEFAULT 0',
+          );
+        }
+        if (oldVersion < 3) {
+          await db.execute(
+            "ALTER TABLE pose_records ADD COLUMN capture_orientation TEXT NOT NULL DEFAULT 'portrait'",
+          );
+          await db.execute(
+            'ALTER TABLE pose_records ADD COLUMN baseline_pose INTEGER NOT NULL DEFAULT 0',
+          );
+          await db.execute(
+            'UPDATE pose_records SET baseline_pose = is_reference',
           );
         }
       },
@@ -74,8 +85,10 @@ class DatabaseService {
         bounding_box_json TEXT NOT NULL,
         anchor_center_json TEXT NOT NULL,
         camera_lens TEXT NOT NULL DEFAULT 'front',
+        capture_orientation TEXT NOT NULL DEFAULT 'portrait',
         image_width INTEGER NOT NULL DEFAULT 0,
         image_height INTEGER NOT NULL DEFAULT 0,
+        baseline_pose INTEGER NOT NULL DEFAULT 0,
         is_reference INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY (series_id) REFERENCES pose_series(id) ON DELETE CASCADE
       )

@@ -30,6 +30,33 @@ class AppSettingsView extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 16),
+            Card(
+              child: SwitchListTile.adaptive(
+                value: settings.showBaselineOverlay,
+                onChanged: controller.setBaselineOverlayEnabled,
+                title: const Text('Show baseline guide overlay'),
+                subtitle: const Text(
+                  'Draw the saved baseline skeleton on top of the live camera feed so positioning is easier before each capture.',
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            _SettingCard(
+              title: 'Baseline overlay opacity',
+              subtitle: 'Adjust how visible the reference guide appears over the camera preview.',
+              valueLabel: '${(settings.baselineOverlayOpacity * 100).round()}%',
+              child: Slider.adaptive(
+                value: settings.baselineOverlayOpacity,
+                min: 0,
+                max: 1,
+                divisions: 20,
+                label: '${(settings.baselineOverlayOpacity * 100).round()}%',
+                onChanged: settings.showBaselineOverlay
+                    ? controller.setBaselineOverlayOpacity
+                    : null,
+              ),
+            ),
+            const SizedBox(height: 16),
             _SettingCard(
               title: 'Alignment threshold',
               subtitle: 'Higher values demand a closer match to the baseline pose before arming auto-capture.',

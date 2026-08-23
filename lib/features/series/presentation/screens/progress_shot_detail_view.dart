@@ -50,9 +50,7 @@ class _ProgressShotDetailViewState
           padding: const EdgeInsets.all(20),
           children: [
             AspectRatio(
-              aspectRatio: widget.record.hasSourceDimensions
-                  ? widget.record.imageWidth / widget.record.imageHeight
-                  : 3 / 4,
+              aspectRatio: widget.record.displayAspectRatio,
               child: PoseThumbnail(
                 record: widget.record,
                 borderRadius: BorderRadius.circular(24),
@@ -107,6 +105,11 @@ class _ProgressShotDetailViewState
                       children: [
                         Chip(
                           label: Text(widget.record.cameraLens.toUpperCase()),
+                        ),
+                        Chip(
+                          label: Text(
+                            widget.record.captureOrientation.storageValue,
+                          ),
                         ),
                         Chip(
                           label: Text(

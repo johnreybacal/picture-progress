@@ -10,9 +10,12 @@ import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import '../../../../app/app_settings.dart';
 import '../../../../app/providers.dart';
 import '../../../../core/constants/app_constants.dart';
+import '../../../../core/utils/accuracy_debouncer.dart';
 import '../../../../core/utils/landmark_smoother.dart';
 import '../../../../core/utils/pose_alignment_engine.dart';
+import '../../../../core/widgets/baseline_template_painter.dart';
 import '../../../../core/widgets/pose_skeleton_painter.dart';
+import '../../../../data/models/capture_orientation.dart';
 import '../../../../data/models/pose_landmark_point.dart';
 import '../../../../data/models/pose_record.dart';
 import '../../../../data/models/pose_series.dart';
@@ -43,16 +46,17 @@ class _CameraViewState extends ConsumerState<CameraView> {
 
   late final PoseDetector _streamPoseDetector;
   late final LandmarkSmoother _landmarkSmoother;
+  late final AccuracyDebouncer _accuracyDebouncer;
 
   List<CameraDescription> _availableCameras = const [];
   CameraController? _cameraController;
   int _selectedCameraIndex = 0;
 
   List<PoseLandmarkPoint> _latestLandmarks = const [];
-  PoseAlignmentResult _alignmentResult = const PoseAlignmentResult.empty();
   InputImageRotation _latestFrameRotation = InputImageRotation.rotation0deg;
   Size _latestFrameSize = Size.zero;
   double _poseMotion = 1.0;
+  double _displayedAlignmentScore = 0;
 
   bool _initializing = true;
   bool _processingFrame = false;
@@ -75,6 +79,10 @@ class _CameraViewState extends ConsumerState<CameraView> {
   void initState() {
     super.initState();
     _landmarkSmoother = LandmarkSmoother();
+    _accuracyDebouncer = AccuracyDebouncer(
+      alpha: AppConstants.defaultAccuracyDebounceAlpha,
+      updateInterval: AppConstants.accuracyDebounceInterval,
+    );
     _streamPoseDetector = PoseDetector(
       options: PoseDetectorOptions(
         model: PoseDetectionModel.base,
@@ -87,6 +95,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
   @override
   void dispose() {
     _landmarkSmoother.reset();
+    _accuracyDebouncer.reset();
     unawaited(_cameraController?.dispose());
     unawaited(_streamPoseDetector.close());
     super.dispose();
@@ -158,6 +167,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
     }
 
     _landmarkSmoother.reset();
+    _accuracyDebouncer.reset();
     setState(() {
       _cameraController = controller;
       _minZoomLevel = minZoom;
@@ -165,8 +175,8 @@ class _CameraViewState extends ConsumerState<CameraView> {
       _zoomLevel = zoom;
       _alignmentHeldSince = null;
       _latestLandmarks = const [];
-      _alignmentResult = const PoseAlignmentResult.empty();
       _poseMotion = 1.0;
+      _displayedAlignmentScore = 0;
       _initializing = false;
     });
   }
@@ -230,16 +240,19 @@ class _CameraViewState extends ConsumerState<CameraView> {
               mirrorReferenceHorizontally: mirrorBaseline,
             )
           : const PoseAlignmentResult.empty();
+      final displayedAlignmentScore = _canAutoCapture
+          ? _accuracyDebouncer.update(alignmentResult.score)
+          : 0.0;
 
       setState(() {
         _latestLandmarks = landmarks;
         _latestFrameRotation = input.rotation;
         _latestFrameSize = input.imageSize;
-        _alignmentResult = alignmentResult;
         _poseMotion = poseMotion;
+        _displayedAlignmentScore = displayedAlignmentScore;
       });
 
-      _handleAutoCapture(alignmentResult.score, poseMotion);
+      _handleAutoCapture(displayedAlignmentScore, poseMotion);
     } catch (_) {
       _alignmentHeldSince = null;
     } finally {
@@ -248,12 +261,13 @@ class _CameraViewState extends ConsumerState<CameraView> {
   }
 
   void _clearTracking(InputImageRotation rotation, Size imageSize) {
+    _accuracyDebouncer.reset();
     setState(() {
       _latestLandmarks = const [];
       _latestFrameRotation = rotation;
       _latestFrameSize = imageSize;
-      _alignmentResult = const PoseAlignmentResult.empty();
       _poseMotion = 1.0;
+      _displayedAlignmentScore = 0;
       _alignmentHeldSince = null;
     });
   }
@@ -303,6 +317,9 @@ class _CameraViewState extends ConsumerState<CameraView> {
       final xFile = await controller.takePicture();
       final fileStorage = ref.read(fileStorageServiceProvider);
       final repository = ref.read(poseRepositoryProvider);
+      final captureOrientation = _captureOrientationForDevice(
+        controller.value.deviceOrientation,
+      );
       final relativePath = await fileStorage.persistCameraCapture(
         xFile,
         seriesId: widget.series.id!,
@@ -329,9 +346,10 @@ class _CameraViewState extends ConsumerState<CameraView> {
         boundingBox: PoseGeometry.boundingBoxFor(landmarks),
         anchorCenter: PoseGeometry.anchorFor(landmarks),
         cameraLens: controller.description.lensDirection.name,
+        captureOrientation: captureOrientation,
         imageWidth: dimensions.width,
         imageHeight: dimensions.height,
-        isReference: widget.isBaselineCapture,
+        baselinePose: widget.isBaselineCapture,
       );
 
       ref.invalidate(seriesRecordsProvider(widget.series.id!));
@@ -348,6 +366,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
     } finally {
       if (shouldRestartStream && mounted && controller.value.isInitialized) {
         _landmarkSmoother.reset();
+        _accuracyDebouncer.reset();
         await controller.startImageStream(_processCameraFrame);
       }
       if (mounted) {
@@ -439,6 +458,20 @@ class _CameraViewState extends ConsumerState<CameraView> {
       rotation: rotation,
       imageSize: Size(image.width.toDouble(), image.height.toDouble()),
     );
+  }
+
+  CaptureOrientation _captureOrientationForDevice(
+    DeviceOrientation orientation,
+  ) {
+    switch (orientation) {
+      case DeviceOrientation.landscapeLeft:
+        return CaptureOrientation.landscapeLeft;
+      case DeviceOrientation.landscapeRight:
+        return CaptureOrientation.landscapeRight;
+      case DeviceOrientation.portraitUp:
+      case DeviceOrientation.portraitDown:
+        return CaptureOrientation.portrait;
+    }
   }
 
   Future<void> _setZoomLevel(double zoom) async {
@@ -556,10 +589,20 @@ class _CameraViewState extends ConsumerState<CameraView> {
   }
 
   Widget _buildFullScreenPreview(CameraController controller) {
+    final settings = ref.watch(appSettingsProvider);
     final previewSize = controller.value.previewSize ?? const Size(720, 1280);
     final orientedPreviewSize = previewSize.height > previewSize.width
         ? previewSize
         : Size(previewSize.height, previewSize.width);
+    final shouldShowBaselineGuide =
+        !_capturing &&
+        !widget.isBaselineCapture &&
+        widget.baselineRecord != null &&
+        settings.showBaselineOverlay;
+    final mirrorBaselineGuide =
+        shouldShowBaselineGuide &&
+        widget.baselineRecord!.cameraLens !=
+            controller.description.lensDirection.name;
 
     return GestureDetector(
       onScaleStart: (_) {
@@ -582,6 +625,16 @@ class _CameraViewState extends ConsumerState<CameraView> {
                 fit: StackFit.expand,
                 children: [
                   CameraPreview(controller),
+                  if (shouldShowBaselineGuide)
+                    IgnorePointer(
+                      child: CustomPaint(
+                        painter: BaselineTemplatePainter(
+                          baselineRecord: widget.baselineRecord!,
+                          opacity: settings.baselineOverlayOpacity,
+                          mirrorHorizontally: mirrorBaselineGuide,
+                        ),
+                      ),
+                    ),
                   IgnorePointer(
                     child: CustomPaint(
                       painter: SkeletonPainter(
@@ -610,7 +663,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
     final showProgress =
         _canAutoCapture &&
         settings.autoCaptureEnabled &&
-        _alignmentResult.score >= settings.alignmentThreshold &&
+        _displayedAlignmentScore >= settings.alignmentThreshold &&
         _poseMotion <= settings.stabilitySensitivity;
 
     return Column(
@@ -618,7 +671,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
       children: [
         if (!widget.isBaselineCapture)
           _CaptureStatusCard(
-            score: _alignmentResult.score,
+            score: _displayedAlignmentScore,
             statusText: _statusMessage(settings),
             progress: autoCaptureProgress,
             showProgress: showProgress,
@@ -709,7 +762,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
     if (!_canAutoCapture || !settings.autoCaptureEnabled) {
       return 'Frame the pose, then trigger the shutter manually.';
     }
-    if (_alignmentResult.score < settings.alignmentThreshold) {
+    if (_displayedAlignmentScore < settings.alignmentThreshold) {
       return 'Match the baseline stance before auto-capture arms.';
     }
     if (_poseMotion > settings.stabilitySensitivity) {

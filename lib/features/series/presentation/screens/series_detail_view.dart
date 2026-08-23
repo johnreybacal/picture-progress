@@ -146,7 +146,7 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
                               Navigator.of(context).push(
                                 MaterialPageRoute(
                                   builder: (context) =>
-                                      ExportPreviewPage(series: _series),
+                                      TimelapseExportView(series: _series),
                                 ),
                               );
                             },

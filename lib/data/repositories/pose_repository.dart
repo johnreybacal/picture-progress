@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/baseline_pose_metadata.dart';
+import '../models/capture_orientation.dart';
 import '../models/pose_bounding_box.dart';
 import '../models/pose_landmark_point.dart';
 import '../models/pose_point.dart';
@@ -97,7 +98,7 @@ class PoseRepository {
     final db = await databaseService.database;
     final result = await db.query(
       'pose_records',
-      where: 'series_id = ? AND is_reference = 1',
+      where: 'series_id = ? AND (baseline_pose = 1 OR is_reference = 1)',
       whereArgs: [seriesId],
       orderBy: 'timestamp ASC',
       limit: 1,
@@ -119,16 +120,17 @@ class PoseRepository {
     required PoseBoundingBox boundingBox,
     required PosePoint anchorCenter,
     required String cameraLens,
+    required CaptureOrientation captureOrientation,
     required int imageWidth,
     required int imageHeight,
-    bool isReference = false,
+    bool baselinePose = false,
   }) async {
     final db = await databaseService.database;
-    if (isReference) {
+    if (baselinePose) {
       await db.update(
         'pose_records',
-        {'is_reference': 0},
-        where: 'series_id = ? AND is_reference = 1',
+        {'baseline_pose': 0, 'is_reference': 0},
+        where: 'series_id = ? AND (baseline_pose = 1 OR is_reference = 1)',
         whereArgs: [seriesId],
       );
     }
@@ -142,9 +144,10 @@ class PoseRepository {
       boundingBox: boundingBox,
       anchorCenter: anchorCenter,
       cameraLens: cameraLens,
+      captureOrientation: captureOrientation,
       imageWidth: imageWidth,
       imageHeight: imageHeight,
-      isReference: isReference,
+      baselinePose: baselinePose,
     );
 
     final id = await db.insert(
@@ -156,7 +159,7 @@ class PoseRepository {
     final savedRecord = record.copyWith(id: id);
     final existingSeries = await getSeries(seriesId);
     if (existingSeries != null &&
-        (existingSeries.thumbnailPath.isEmpty || isReference)) {
+        (existingSeries.thumbnailPath.isEmpty || baselinePose)) {
       await db.update(
         'pose_series',
         {'thumbnail_path': imagePath},
@@ -165,7 +168,7 @@ class PoseRepository {
       );
     }
 
-    if (isReference) {
+    if (baselinePose) {
       await _updateBaselineMetadata(db, seriesId, savedRecord);
     }
 
@@ -212,6 +215,7 @@ class PoseRepository {
       anchorCenter: record.anchorCenter,
       boundingBox: record.boundingBox,
       cameraLens: record.cameraLens,
+      captureOrientation: record.captureOrientation,
     );
     await db.update(
       'pose_series',
@@ -226,7 +230,7 @@ class PoseRepository {
       'pose_records',
       where: 'series_id = ?',
       whereArgs: [seriesId],
-      orderBy: 'is_reference DESC, timestamp DESC',
+      orderBy: 'baseline_pose DESC, is_reference DESC, timestamp DESC',
       limit: 1,
     );
     final thumbnailPath = result.isEmpty
@@ -243,7 +247,7 @@ class PoseRepository {
   Future<void> _rebuildBaselineMetadata(Database db, int seriesId) async {
     final result = await db.query(
       'pose_records',
-      where: 'series_id = ? AND is_reference = 1',
+      where: 'series_id = ? AND (baseline_pose = 1 OR is_reference = 1)',
       whereArgs: [seriesId],
       limit: 1,
       orderBy: 'timestamp DESC',
