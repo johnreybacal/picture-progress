@@ -23,7 +23,7 @@ class DatabaseService {
 
     return openDatabase(
       databasePath,
-      version: 3,
+      version: 4,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
       },
@@ -59,6 +59,33 @@ class DatabaseService {
             'UPDATE pose_records SET baseline_pose = is_reference',
           );
         }
+        if (oldVersion < 4) {
+          await db.execute(
+            "ALTER TABLE pose_series ADD COLUMN preferred_lens TEXT NOT NULL DEFAULT ''",
+          );
+          await db.execute('''
+            UPDATE pose_series
+            SET preferred_lens = COALESCE(
+              (
+                SELECT camera_lens
+                FROM pose_records
+                WHERE pose_records.series_id = pose_series.id
+                  AND (pose_records.baseline_pose = 1 OR pose_records.is_reference = 1)
+                ORDER BY pose_records.timestamp ASC
+                LIMIT 1
+              ),
+              (
+                SELECT camera_lens
+                FROM pose_records
+                WHERE pose_records.series_id = pose_series.id
+                ORDER BY pose_records.timestamp ASC
+                LIMIT 1
+              ),
+              ''
+            )
+            WHERE preferred_lens = ''
+          ''');
+        }
       },
     );
   }
@@ -70,6 +97,7 @@ class DatabaseService {
         name TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         thumbnail_path TEXT NOT NULL DEFAULT '',
+        preferred_lens TEXT NOT NULL DEFAULT '',
         baseline_metadata_json TEXT NOT NULL DEFAULT ''
       )
     ''');

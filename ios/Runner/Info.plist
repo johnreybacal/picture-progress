@@ -28,6 +28,10 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Picture Progress needs camera access to capture aligned posture photos and build timelapses.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Picture Progress needs photo library access so it can save progress photos and exported videos into folders you can access outside the app.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Picture Progress needs photo library access so you can choose where photos and exports are stored.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

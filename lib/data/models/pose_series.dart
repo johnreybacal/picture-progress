@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'baseline_pose_metadata.dart';
+import 'lens_facing.dart';
 
 class PoseSeries {
   const PoseSeries({
@@ -9,6 +10,7 @@ class PoseSeries {
     required this.createdAt,
     required this.thumbnailPath,
     this.baselineMetadata,
+    this.preferredLens,
   });
 
   final int? id;
@@ -16,6 +18,7 @@ class PoseSeries {
   final DateTime createdAt;
   final String thumbnailPath;
   final BaselinePoseMetadata? baselineMetadata;
+  final LensFacing? preferredLens;
 
   PoseSeries copyWith({
     int? id,
@@ -23,6 +26,7 @@ class PoseSeries {
     DateTime? createdAt,
     String? thumbnailPath,
     BaselinePoseMetadata? baselineMetadata,
+    LensFacing? preferredLens,
   }) {
     return PoseSeries(
       id: id ?? this.id,
@@ -30,6 +34,7 @@ class PoseSeries {
       createdAt: createdAt ?? this.createdAt,
       thumbnailPath: thumbnailPath ?? this.thumbnailPath,
       baselineMetadata: baselineMetadata ?? this.baselineMetadata,
+      preferredLens: preferredLens ?? this.preferredLens,
     );
   }
 
@@ -40,6 +45,7 @@ class PoseSeries {
       name: map['name'] as String,
       createdAt: DateTime.fromMillisecondsSinceEpoch(map['created_at'] as int),
       thumbnailPath: map['thumbnail_path'] as String? ?? '',
+      preferredLens: LensFacing.fromStorage(map['preferred_lens'] as String?),
       baselineMetadata: baselineMetadataJson.isEmpty
           ? null
           : BaselinePoseMetadata.fromJson(
@@ -56,6 +62,7 @@ class PoseSeries {
       'name': name,
       'created_at': createdAt.millisecondsSinceEpoch,
       'thumbnail_path': thumbnailPath,
+      'preferred_lens': preferredLens?.storageValue ?? '',
       'baseline_metadata_json': baselineMetadata == null
           ? ''
           : jsonEncode(baselineMetadata!.toJson()),

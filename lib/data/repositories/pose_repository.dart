@@ -4,6 +4,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/baseline_pose_metadata.dart';
 import '../models/capture_orientation.dart';
+import '../models/lens_facing.dart';
 import '../models/pose_bounding_box.dart';
 import '../models/pose_landmark_point.dart';
 import '../models/pose_point.dart';
@@ -35,6 +36,7 @@ class PoseRepository {
       createdAt: DateTime.now(),
       thumbnailPath: '',
       baselineMetadata: null,
+      preferredLens: null,
     );
 
     final id = await db.insert(
@@ -79,7 +81,10 @@ class PoseRepository {
       await fileStorageService.deleteStoredFile(record.imagePath);
     }
     await db.delete('pose_series', where: 'id = ?', whereArgs: [series.id]);
-    await fileStorageService.deleteSeriesStorage(series.id!);
+    await fileStorageService.deleteSeriesStorage(
+      series.id!,
+      seriesName: series.name,
+    );
   }
 
   Future<List<PoseRecord>> fetchRecords(int seriesId) async {
@@ -163,6 +168,17 @@ class PoseRepository {
       await db.update(
         'pose_series',
         {'thumbnail_path': imagePath},
+        where: 'id = ?',
+        whereArgs: [seriesId],
+      );
+    }
+
+    if (existingSeries != null &&
+        (baselinePose || existingSeries.preferredLens == null)) {
+      final preferredLens = LensFacing.fromCameraLensName(record.cameraLens);
+      await db.update(
+        'pose_series',
+        {'preferred_lens': preferredLens.storageValue},
         where: 'id = ?',
         whereArgs: [seriesId],
       );

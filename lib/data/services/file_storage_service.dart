@@ -1,40 +1,62 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/capture_orientation.dart';
+import '../models/pose_series.dart';
+import 'permission_service.dart';
+
 class FileStorageService {
-  FileStorageService() : _uuid = const Uuid();
+  FileStorageService({required this.permissionService}) : _uuid = const Uuid();
 
-  static const String _androidPublicExportDirectory =
+  static const String _androidPublicRootDirectory =
       '/storage/emulated/0/Picture Progress';
+  static const String _exportsDirectoryName = 'exports';
 
+  final PermissionService permissionService;
   final Uuid _uuid;
+
+  Future<void> initializeStorageDirectories() async {
+    await permissionService.ensureStorageAccess();
+    await defaultPhotoLibraryRootPath();
+    await defaultExportRootPath();
+  }
 
   Future<String> persistCameraCapture(
     XFile sourceFile, {
     required int seriesId,
+    required CaptureOrientation captureOrientation,
+    String? preferredRootPath,
   }) async {
-    final documentsDirectory = await getApplicationDocumentsDirectory();
+    await permissionService.ensureStorageAccess();
     final seriesDirectory = Directory(
-      path.join(documentsDirectory.path, 'captures', 'series_$seriesId'),
+      await resolveSeriesCaptureDirectoryPath(
+        seriesId: seriesId,
+        preferredRootPath: preferredRootPath,
+      ),
     );
     await seriesDirectory.create(recursive: true);
 
-    final extension = path.extension(sourceFile.path).isEmpty
-        ? '.jpg'
-        : path.extension(sourceFile.path);
+    final extension = '.jpg';
     final filename =
         '${DateTime.now().millisecondsSinceEpoch}_${_uuid.v4().replaceAll('-', '')}$extension';
     final destination = File(path.join(seriesDirectory.path, filename));
 
-    await File(sourceFile.path).copy(destination.path);
+    final sourceBytes = await File(sourceFile.path).readAsBytes();
+    final uprightBytes = _buildUprightCaptureBytes(
+      sourceBytes,
+      captureOrientation,
+    );
+    await destination.writeAsBytes(uprightBytes, flush: true);
 
-    return path.relative(destination.path, from: documentsDirectory.path);
+    return destination.path;
   }
 
   Future<String> resolveAbsolutePath(String storedPath) async {
@@ -71,41 +93,35 @@ class FileStorageService {
     }
   }
 
-  Future<void> deleteSeriesStorage(int seriesId) async {
-    final documentsDirectory = await getApplicationDocumentsDirectory();
+  Future<void> deleteSeriesStorage(int seriesId, {String? seriesName}) async {
     final captureDirectory = Directory(
-      path.join(documentsDirectory.path, 'captures', 'series_$seriesId'),
+      await resolveSeriesCaptureDirectoryPath(seriesId: seriesId),
     );
-    final exportDirectory = Directory(
-      path.join(documentsDirectory.path, 'exports', 'series_$seriesId'),
-    );
-
     if (await captureDirectory.exists()) {
       await captureDirectory.delete(recursive: true);
     }
-    if (await exportDirectory.exists()) {
-      await exportDirectory.delete(recursive: true);
-    }
-  }
 
-  Future<String> defaultExportDirectoryPath() async {
-    if (Platform.isAndroid) {
-      final publicDirectory = Directory(_androidPublicExportDirectory);
-      try {
-        await publicDirectory.create(recursive: true);
-        return publicDirectory.path;
-      } catch (_) {}
+    if (seriesName == null || seriesName.trim().isEmpty) {
+      return;
     }
 
-    final baseDirectory = await _resolveDefaultExportBaseDirectory();
-    final fallbackDirectory = Directory(
-      path.join(baseDirectory.path, 'Picture Progress'),
+    final exportSeriesDirectory = Directory(
+      path.join(await defaultExportRootPath(), _slugify(seriesName)),
     );
-    await fallbackDirectory.create(recursive: true);
-    return fallbackDirectory.path;
+    if (await exportSeriesDirectory.exists()) {
+      await exportSeriesDirectory.delete(recursive: true);
+    }
   }
 
-  Future<String> resolveExportDirectoryPath(String? preferredPath) async {
+  Future<String> defaultPhotoLibraryRootPath() async {
+    await permissionService.ensureStorageAccess();
+    final rootDirectory = await _resolveDefaultRootDirectory();
+    await rootDirectory.create(recursive: true);
+    return rootDirectory.path;
+  }
+
+  Future<String> resolvePhotoLibraryRootPath(String? preferredPath) async {
+    await permissionService.ensureStorageAccess();
     final trimmed = preferredPath?.trim() ?? '';
     if (trimmed.isNotEmpty) {
       final directory = Directory(trimmed);
@@ -113,39 +129,104 @@ class FileStorageService {
       return directory.path;
     }
 
-    return defaultExportDirectoryPath();
+    return defaultPhotoLibraryRootPath();
   }
 
-  Future<String?> pickExportDirectory() async {
+  Future<String?> pickPhotoStorageDirectory() async {
+    await permissionService.ensureStorageAccess();
     final selectedPath = await FilePicker.getDirectoryPath(
-      dialogTitle: 'Select export directory',
+      dialogTitle: 'Select photo storage folder',
     );
     if (selectedPath == null || selectedPath.trim().isEmpty) {
       return null;
     }
 
-    return resolveExportDirectoryPath(selectedPath);
+    return resolvePhotoLibraryRootPath(selectedPath);
+  }
+
+  Future<String> resolveSeriesCaptureDirectoryPath({
+    required int seriesId,
+    String? preferredRootPath,
+  }) async {
+    final rootPath = await resolvePhotoLibraryRootPath(preferredRootPath);
+    final seriesDirectory = Directory(path.join(rootPath, seriesId.toString()));
+    await seriesDirectory.create(recursive: true);
+    return seriesDirectory.path;
+  }
+
+  Future<String> defaultExportRootPath() async {
+    await permissionService.ensureStorageAccess();
+    final rootPath = await defaultPhotoLibraryRootPath();
+    final exportRoot = Directory(path.join(rootPath, _exportsDirectoryName));
+    await exportRoot.create(recursive: true);
+    return exportRoot.path;
+  }
+
+  Future<String> resolveExportRootPath(String? preferredPath) async {
+    await permissionService.ensureStorageAccess();
+    final trimmed = preferredPath?.trim() ?? '';
+    if (trimmed.isNotEmpty) {
+      final directory = Directory(trimmed);
+      await directory.create(recursive: true);
+      return directory.path;
+    }
+
+    return defaultExportRootPath();
+  }
+
+  Future<String> defaultExportDirectoryPath({
+    required PoseSeries series,
+    String? preferredRootPath,
+    DateTime? exportedAt,
+  }) async {
+    await permissionService.ensureStorageAccess();
+    final exportRootPath = await resolveExportRootPath(preferredRootPath);
+    final exportDirectory = Directory(
+      path.join(
+        exportRootPath,
+        _slugify(series.name),
+        _dateFolder(exportedAt ?? DateTime.now()),
+      ),
+    );
+    await exportDirectory.create(recursive: true);
+    return exportDirectory.path;
+  }
+
+  Future<String> resolveExportDirectoryPath(String? preferredPath) async {
+    return resolveExportRootPath(preferredPath);
+  }
+
+  Future<String?> pickExportDirectory() async {
+    await permissionService.ensureStorageAccess();
+    final selectedPath = await FilePicker.getDirectoryPath(
+      dialogTitle: 'Select export folder',
+    );
+    if (selectedPath == null || selectedPath.trim().isEmpty) {
+      return null;
+    }
+
+    return resolveExportRootPath(selectedPath);
   }
 
   Future<ExportWorkspace> createExportWorkspace(
-    int seriesId, {
+    PoseSeries series, {
     String? exportDirectoryPath,
   }) async {
     final outputDirectory = Directory(
-      await resolveExportDirectoryPath(exportDirectoryPath),
+      await defaultExportDirectoryPath(
+        series: series,
+        preferredRootPath: exportDirectoryPath,
+      ),
     );
     await outputDirectory.create(recursive: true);
     final rootDirectory = Directory(
       path.join(
         outputDirectory.path,
         '.picture_progress_tmp',
-        'series_$seriesId',
         DateTime.now().millisecondsSinceEpoch.toString(),
       ),
     );
-    final framesDirectory = Directory(
-      path.join(rootDirectory.path, 'normalized_frames'),
-    );
+    final framesDirectory = Directory(path.join(rootDirectory.path, 'frames'));
     await framesDirectory.create(recursive: true);
 
     return ExportWorkspace(
@@ -166,15 +247,56 @@ class FileStorageService {
     }
   }
 
-  Future<Directory> _resolveDefaultExportBaseDirectory() async {
-    if (Platform.isAndroid) {
-      final externalDirectory = await getExternalStorageDirectory();
-      if (externalDirectory != null) {
-        return externalDirectory;
-      }
+  Uint8List _buildUprightCaptureBytes(
+    Uint8List sourceBytes,
+    CaptureOrientation captureOrientation,
+  ) {
+    final decoded = img.decodeImage(sourceBytes);
+    if (decoded == null) {
+      return sourceBytes;
     }
 
-    return getApplicationDocumentsDirectory();
+    var normalized = img.bakeOrientation(decoded);
+    if (captureOrientation.isLandscape &&
+        normalized.width > normalized.height) {
+      normalized = img.copyRotate(
+        normalized,
+        angle: captureOrientation == CaptureOrientation.landscapeLeft
+            ? 90
+            : 270,
+      );
+    }
+
+    return Uint8List.fromList(img.encodeJpg(normalized, quality: 94));
+  }
+
+  Future<Directory> _resolveDefaultRootDirectory() async {
+    if (Platform.isAndroid) {
+      final publicDirectory = Directory(_androidPublicRootDirectory);
+      try {
+        await publicDirectory.create(recursive: true);
+        return publicDirectory;
+      } catch (_) {}
+    }
+
+    final documentsDirectory = await getApplicationDocumentsDirectory();
+    return Directory(path.join(documentsDirectory.path, 'Picture Progress'));
+  }
+
+  String _dateFolder(DateTime value) {
+    final month = value.month.toString().padLeft(2, '0');
+    final day = value.day.toString().padLeft(2, '0');
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    return '${value.year}-$month-${day}_$hour$minute';
+  }
+
+  String _slugify(String value) {
+    final slug = value
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    return slug.isEmpty ? 'series' : slug;
   }
 }
 

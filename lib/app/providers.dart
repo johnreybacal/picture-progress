@@ -7,14 +7,21 @@ import '../data/models/pose_series.dart';
 import '../data/repositories/pose_repository.dart';
 import '../data/services/database_service.dart';
 import '../data/services/file_storage_service.dart';
+import '../data/services/permission_service.dart';
 import '../data/services/timelapse_export_service.dart';
 
 final databaseServiceProvider = Provider<DatabaseService>((ref) {
   return DatabaseService();
 });
 
+final permissionServiceProvider = Provider<PermissionService>((ref) {
+  return PermissionService();
+});
+
 final fileStorageServiceProvider = Provider<FileStorageService>((ref) {
-  return FileStorageService();
+  return FileStorageService(
+    permissionService: ref.watch(permissionServiceProvider),
+  );
 });
 
 final poseRepositoryProvider = Provider<PoseRepository>((ref) {
@@ -127,6 +134,12 @@ class AppSettingsController extends StateNotifier<AppSettings> {
 
   void setBaselineOverlayOpacity(double opacity) {
     state = state.copyWith(baselineOverlayOpacity: opacity);
+  }
+
+  void setPhotoStorageDirectoryPath(String photoStorageDirectoryPath) {
+    state = state.copyWith(
+      photoStorageDirectoryPath: photoStorageDirectoryPath.trim(),
+    );
   }
 
   void setExportDirectoryPath(String exportDirectoryPath) {

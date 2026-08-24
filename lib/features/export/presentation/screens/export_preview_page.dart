@@ -3,9 +3,11 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as path;
 
 import '../../../../app/providers.dart';
 import '../../../../core/constants/app_constants.dart';
+import '../../../../core/utils/path_formatter.dart';
 import '../../../../core/widgets/pose_thumbnail.dart';
 import '../../../../data/models/pose_record.dart';
 import '../../../../data/models/pose_series.dart';
@@ -35,6 +37,7 @@ class _TimelapseExportViewState extends ConsumerState<TimelapseExportView> {
   bool _exporting = false;
   bool _loadingExportDirectory = true;
   String? _exportDirectoryPath;
+  String? _exportDirectoryLabel;
 
   double get _speedMultiplier => _speedPresets[_selectedSpeedIndex];
 
@@ -61,7 +64,7 @@ class _TimelapseExportViewState extends ConsumerState<TimelapseExportView> {
     final recordsAsync = ref.watch(seriesRecordsProvider(widget.series.id!));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Timelapse export')),
+      appBar: AppBar(title: const Text('Video export')),
       body: SafeArea(
         child: recordsAsync.when(
           data: (records) {
@@ -85,7 +88,8 @@ class _TimelapseExportViewState extends ConsumerState<TimelapseExportView> {
               orderedRecords.length - 1,
             );
             final selectedRecord = orderedRecords[selectedIndex];
-            final currentExportDirectory = _exportDirectoryPath ?? 'Loading...';
+            final currentExportDirectory =
+                _exportDirectoryLabel ?? 'Loading...';
 
             return Stack(
               children: [
@@ -104,7 +108,7 @@ class _TimelapseExportViewState extends ConsumerState<TimelapseExportView> {
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              'Preview the stabilized image sequence at the same speed and loop setting that will drive the final export.',
+                              'Preview the saved photo sequence at the same speed and loop setting that will drive the final export.',
                             ),
                             const SizedBox(height: 16),
                             ClipRRect(
@@ -192,7 +196,7 @@ class _TimelapseExportViewState extends ConsumerState<TimelapseExportView> {
                             ),
                             const SizedBox(height: 6),
                             const Text(
-                              'This speed controls the interactive preview timing and the final MP4/GIF framerate.',
+                              'This speed controls the interactive preview timing and the final MP4 or GIF frame rate.',
                             ),
                             const SizedBox(height: 16),
                             Slider(
@@ -238,7 +242,7 @@ class _TimelapseExportViewState extends ConsumerState<TimelapseExportView> {
                             ),
                             const SizedBox(height: 6),
                             const Text(
-                              'Exports default to the Picture Progress folder. You can keep that directory or point the export to another writable path.',
+                              'Exports stay inside a dated folder for this timeline. You can keep the default storage root or point future exports somewhere else.',
                             ),
                             const SizedBox(height: 12),
                             DecoratedBox(
@@ -294,7 +298,7 @@ class _TimelapseExportViewState extends ConsumerState<TimelapseExportView> {
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              'Each frame is re-centered from the saved shoulder/hip midpoint, orientation-corrected if needed, cropped to a consistent body box, and rendered at $_resolvedFps FPS.',
+                              'Each frame is rotated upright if needed, translated around the baseline body center, and rendered full-frame at $_resolvedFps FPS without zoom cropping.',
                             ),
                             const SizedBox(height: 16),
                             Row(
@@ -355,14 +359,21 @@ class _TimelapseExportViewState extends ConsumerState<TimelapseExportView> {
   Future<void> _loadExportDirectory() async {
     final settings = ref.read(appSettingsProvider);
     final fileStorage = ref.read(fileStorageServiceProvider);
-    final exportDirectory = settings.exportDirectoryPath.isNotEmpty
+    final exportRoot = settings.exportDirectoryPath.isNotEmpty
         ? settings.exportDirectoryPath
-        : await fileStorage.defaultExportDirectoryPath();
+        : await fileStorage.defaultExportRootPath();
+    final previewDirectory = await fileStorage.defaultExportDirectoryPath(
+      series: widget.series,
+      preferredRootPath: exportRoot,
+    );
     if (!mounted) {
       return;
     }
     setState(() {
-      _exportDirectoryPath = exportDirectory;
+      _exportDirectoryPath = exportRoot;
+      _exportDirectoryLabel = PathFormatter.formatDirectoryLabel(
+        previewDirectory,
+      );
       _loadingExportDirectory = false;
     });
   }
@@ -376,21 +387,35 @@ class _TimelapseExportViewState extends ConsumerState<TimelapseExportView> {
     if (!mounted || selectedPath == null) {
       return;
     }
+    final previewDirectory = await fileStorage.defaultExportDirectoryPath(
+      series: widget.series,
+      preferredRootPath: selectedPath,
+    );
     ref.read(appSettingsProvider.notifier).setExportDirectoryPath(selectedPath);
     setState(() {
       _exportDirectoryPath = selectedPath;
+      _exportDirectoryLabel = PathFormatter.formatDirectoryLabel(
+        previewDirectory,
+      );
     });
   }
 
   Future<void> _useDefaultExportDirectory() async {
     final fileStorage = ref.read(fileStorageServiceProvider);
-    final defaultPath = await fileStorage.defaultExportDirectoryPath();
-    ref.read(appSettingsProvider.notifier).setExportDirectoryPath(defaultPath);
+    final defaultRoot = await fileStorage.defaultExportRootPath();
+    final previewDirectory = await fileStorage.defaultExportDirectoryPath(
+      series: widget.series,
+      preferredRootPath: defaultRoot,
+    );
+    ref.read(appSettingsProvider.notifier).setExportDirectoryPath(defaultRoot);
     if (!mounted) {
       return;
     }
     setState(() {
-      _exportDirectoryPath = defaultPath;
+      _exportDirectoryPath = defaultRoot;
+      _exportDirectoryLabel = PathFormatter.formatDirectoryLabel(
+        previewDirectory,
+      );
     });
   }
 
@@ -484,9 +509,13 @@ class _TimelapseExportViewState extends ConsumerState<TimelapseExportView> {
         return;
       }
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Export created at $outputPath')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Export saved to ${PathFormatter.formatDirectoryLabel(path.dirname(outputPath))}',
+          ),
+        ),
+      );
     } catch (error) {
       if (!mounted) {
         return;

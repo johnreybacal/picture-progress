@@ -8,6 +8,7 @@ class AppSettings {
     this.autoCaptureDelay = AppConstants.defaultAutoCaptureDelay,
     this.showBaselineOverlay = true,
     this.baselineOverlayOpacity = AppConstants.defaultBaselineOverlayOpacity,
+    this.photoStorageDirectoryPath = '',
     this.exportDirectoryPath = '',
   });
 
@@ -17,6 +18,7 @@ class AppSettings {
   final Duration autoCaptureDelay;
   final bool showBaselineOverlay;
   final double baselineOverlayOpacity;
+  final String photoStorageDirectoryPath;
   final String exportDirectoryPath;
 
   AppSettings copyWith({
@@ -26,6 +28,7 @@ class AppSettings {
     Duration? autoCaptureDelay,
     bool? showBaselineOverlay,
     double? baselineOverlayOpacity,
+    String? photoStorageDirectoryPath,
     String? exportDirectoryPath,
   }) {
     return AppSettings(
@@ -36,6 +39,8 @@ class AppSettings {
       showBaselineOverlay: showBaselineOverlay ?? this.showBaselineOverlay,
       baselineOverlayOpacity:
           baselineOverlayOpacity ?? this.baselineOverlayOpacity,
+      photoStorageDirectoryPath:
+          photoStorageDirectoryPath ?? this.photoStorageDirectoryPath,
       exportDirectoryPath: exportDirectoryPath ?? this.exportDirectoryPath,
     );
   }

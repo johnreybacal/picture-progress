@@ -40,7 +40,7 @@ class SeriesHomeView extends ConsumerWidget {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _createSeries(context, ref),
         icon: const Icon(Icons.add_photo_alternate_outlined),
-        label: const Text('New series'),
+        label: const Text('New timeline'),
       ),
       body: SafeArea(
         child: seriesAsync.when(
@@ -58,12 +58,12 @@ class SeriesHomeView extends ConsumerWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Gym posture timelapse',
+                            'Personal photo timelines',
                             style: Theme.of(context).textTheme.headlineSmall,
                           ),
                           const SizedBox(height: 10),
                           const Text(
-                            'Create a posture series per angle, save a baseline reference, and track progress with live skeleton alignment, stabilized exports, and local metadata control.',
+                            'Create a timeline for posture, outfits, growth, or visual check-ins. Save one baseline photo, add matching updates over time, and export a clean comparison video when you are ready.',
                           ),
                         ],
                       ),
@@ -75,7 +75,7 @@ class SeriesHomeView extends ConsumerWidget {
                       child: Padding(
                         padding: EdgeInsets.all(18),
                         child: Text(
-                          'No series yet. Start with angles like Front Biceps, Side Profile, or Back Profile.',
+                          'No timelines yet. Start with a repeatable view like Front View, Side View, or a weekly check-in angle.',
                         ),
                       ),
                     )
@@ -109,7 +109,7 @@ class SeriesHomeView extends ConsumerWidget {
   Future<void> _createSeries(BuildContext context, WidgetRef ref) async {
     final name = await _promptForSeriesName(
       context,
-      title: 'Create Pose Series',
+      title: 'Create Photo Timeline',
     );
     if (!context.mounted || name == null || name.isEmpty) {
       return;
@@ -145,7 +145,7 @@ class SeriesHomeView extends ConsumerWidget {
   ) async {
     final updatedName = await _promptForSeriesName(
       context,
-      title: 'Edit Series Name',
+      title: 'Rename Timeline',
       initialValue: series.name,
     );
     if (!context.mounted || updatedName == null || updatedName.isEmpty) {
@@ -164,9 +164,9 @@ class SeriesHomeView extends ConsumerWidget {
     final shouldDelete = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete series?'),
+        title: const Text('Delete timeline?'),
         content: Text(
-          'This removes ${series.name}, all progress shots, and local exports for that series.',
+          'This removes ${series.name}, all progress photos, and local exports for that timeline.',
         ),
         actions: [
           TextButton(
@@ -202,8 +202,8 @@ class SeriesHomeView extends ConsumerWidget {
           controller: controller,
           autofocus: true,
           decoration: const InputDecoration(
-            labelText: 'Series label',
-            hintText: 'Front Biceps',
+            labelText: 'Timeline name',
+            hintText: 'Front view',
           ),
           textInputAction: TextInputAction.done,
           onSubmitted: (value) => Navigator.of(context).pop(value.trim()),
@@ -286,11 +286,11 @@ class _SeriesCard extends ConsumerWidget {
                           itemBuilder: (context) => const [
                             PopupMenuItem(
                               value: _SeriesCardAction.edit,
-                              child: Text('Edit series'),
+                              child: Text('Rename timeline'),
                             ),
                             PopupMenuItem(
                               value: _SeriesCardAction.delete,
-                              child: Text('Delete series'),
+                              child: Text('Delete timeline'),
                             ),
                           ],
                         ),
@@ -308,14 +308,14 @@ class _SeriesCard extends ConsumerWidget {
                         Chip(
                           label: Text(
                             series.baselineMetadata == null
-                                ? 'Baseline pending'
+                                ? 'Baseline needed'
                                 : 'Baseline ready',
                           ),
                         ),
-                        if (series.baselineMetadata != null)
+                        if (series.preferredLens != null)
                           Chip(
                             label: Text(
-                              series.baselineMetadata!.cameraLens.toUpperCase(),
+                              'Default: ${series.preferredLens!.label.toLowerCase()}',
                             ),
                           ),
                       ],
@@ -357,12 +357,12 @@ class _SeriesPreview extends StatelessWidget {
           ? const DecoratedBox(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  colors: [Color(0xFFBBD8C6), Color(0xFFE8E1CF)],
+                  colors: [Color(0xFFDDE2E8), Color(0xFFF2EEE7)],
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                 ),
               ),
-              child: Icon(Icons.accessibility_new_rounded, size: 34),
+              child: Icon(Icons.photo_library_outlined, size: 34),
             )
           : PoseThumbnail(record: thumbnailRecord),
     );

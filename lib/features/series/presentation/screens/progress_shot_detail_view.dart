@@ -44,7 +44,7 @@ class _ProgressShotDetailViewState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Progress shot')),
+      appBar: AppBar(title: const Text('Progress photo')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(20),
@@ -65,14 +65,14 @@ class _ProgressShotDetailViewState
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Metadata',
+                      'Photo details',
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     const SizedBox(height: 12),
                     TextField(
                       controller: _labelController,
                       decoration: const InputDecoration(
-                        labelText: 'Shot label',
+                        labelText: 'Photo note',
                         hintText: 'Week 8 check-in',
                       ),
                     ),
@@ -104,20 +104,26 @@ class _ProgressShotDetailViewState
                       runSpacing: 8,
                       children: [
                         Chip(
-                          label: Text(widget.record.cameraLens.toUpperCase()),
-                        ),
-                        Chip(
                           label: Text(
-                            widget.record.captureOrientation.storageValue,
+                            widget.record.cameraLens == 'front'
+                                ? 'Front camera'
+                                : 'Rear camera',
                           ),
                         ),
                         Chip(
                           label: Text(
-                            '${widget.record.landmarks.length} landmarks',
+                            widget.record.captureOrientation.storageValue
+                                .replaceAll('Left', ' left')
+                                .replaceAll('Right', ' right'),
+                          ),
+                        ),
+                        Chip(
+                          label: Text(
+                            '${widget.record.landmarks.length} alignment markers',
                           ),
                         ),
                         if (widget.record.isReference)
-                          const Chip(label: Text('Baseline reference')),
+                          const Chip(label: Text('Baseline photo')),
                       ],
                     ),
                   ],
@@ -134,13 +140,13 @@ class _ProgressShotDetailViewState
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.save_outlined),
-              label: const Text('Save metadata'),
+              label: const Text('Save details'),
             ),
             const SizedBox(height: 10),
             OutlinedButton.icon(
               onPressed: _saving ? null : _deleteRecord,
               icon: const Icon(Icons.delete_outline_rounded),
-              label: const Text('Delete shot'),
+              label: const Text('Delete photo'),
             ),
           ],
         ),
@@ -231,9 +237,9 @@ class _ProgressShotDetailViewState
     final shouldDelete = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete shot?'),
+        title: const Text('Delete photo?'),
         content: const Text(
-          'This removes the stored image and metadata for this progress shot.',
+          'This removes the stored image and metadata for this progress photo.',
         ),
         actions: [
           TextButton(

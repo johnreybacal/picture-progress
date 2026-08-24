@@ -7,20 +7,16 @@ class ExportFramePlan {
     required this.sourcePath,
     required this.outputPath,
     required this.quarterTurns,
-    required this.cropLeft,
-    required this.cropTop,
-    required this.cropWidth,
-    required this.cropHeight,
+    required this.frameLeft,
+    required this.frameTop,
   });
 
   final PoseRecord record;
   final String sourcePath;
   final String outputPath;
   final int quarterTurns;
-  final double cropLeft;
-  final double cropTop;
-  final double cropWidth;
-  final double cropHeight;
+  final double frameLeft;
+  final double frameTop;
 }
 
 class TimelapseCommandBuilder {
@@ -43,8 +39,8 @@ class TimelapseCommandBuilder {
       filters.add(preRotationFilter);
     }
     filters.addAll([
-      'crop=${_format(framePlan.cropWidth)}:${_format(framePlan.cropHeight)}:${_format(framePlan.cropLeft)}:${_format(framePlan.cropTop)}',
-      'scale=${AppConstants.exportWidth}:${AppConstants.exportHeight}:flags=lanczos',
+      'scale=${AppConstants.exportWidth}:${AppConstants.exportHeight}:force_original_aspect_ratio=decrease:flags=lanczos',
+      'pad=${AppConstants.exportWidth}:${AppConstants.exportHeight}:${_format(framePlan.frameLeft)}:${_format(framePlan.frameTop)}:color=0xF3F2EE',
       'setsar=1',
     ]);
     return filters.join(',');

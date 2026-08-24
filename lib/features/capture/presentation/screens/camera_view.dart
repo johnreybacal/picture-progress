@@ -108,8 +108,13 @@ class _CameraViewState extends ConsumerState<CameraView> {
         throw StateError('No camera is available on this device.');
       }
 
+      final preferredLensDirection =
+          widget.series.preferredLens?.cameraLensDirection ??
+          (widget.baselineRecord?.cameraLens == CameraLensDirection.back.name
+              ? CameraLensDirection.back
+              : CameraLensDirection.front);
       final preferredIndex = cameras.indexWhere(
-        (camera) => camera.lensDirection == CameraLensDirection.front,
+        (camera) => camera.lensDirection == preferredLensDirection,
       );
       _availableCameras = cameras;
       _selectedCameraIndex = preferredIndex >= 0 ? preferredIndex : 0;
@@ -152,7 +157,6 @@ class _CameraViewState extends ConsumerState<CameraView> {
     );
 
     await controller.initialize();
-    await controller.lockCaptureOrientation(DeviceOrientation.portraitUp);
 
     final minZoom = await controller.getMinZoomLevel();
     final maxZoom = await controller.getMaxZoomLevel();
@@ -317,12 +321,17 @@ class _CameraViewState extends ConsumerState<CameraView> {
       final xFile = await controller.takePicture();
       final fileStorage = ref.read(fileStorageServiceProvider);
       final repository = ref.read(poseRepositoryProvider);
+      final settings = ref.read(appSettingsProvider);
       final captureOrientation = _captureOrientationForDevice(
         controller.value.deviceOrientation,
       );
       final relativePath = await fileStorage.persistCameraCapture(
         xFile,
         seriesId: widget.series.id!,
+        captureOrientation: captureOrientation,
+        preferredRootPath: settings.photoStorageDirectoryPath.isEmpty
+            ? null
+            : settings.photoStorageDirectoryPath,
       );
       final absolutePath = await fileStorage.resolveAbsolutePath(relativePath);
       final dimensions = await fileStorage.readImageDimensions(absolutePath);
@@ -334,7 +343,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
           : detectedLandmarks;
 
       if (landmarks.isEmpty) {
-        throw StateError('No pose was detected in the saved frame.');
+        throw StateError('No person was detected in the saved photo.');
       }
 
       await repository.addRecord(
@@ -739,8 +748,8 @@ class _CameraViewState extends ConsumerState<CameraView> {
             _ShutterButton(
               busy: _capturing,
               semanticLabel: widget.isBaselineCapture
-                  ? 'Save baseline pose'
-                  : 'Capture progress shot',
+                  ? 'Save baseline photo'
+                  : 'Capture progress photo',
               onPressed: _capturing ? null : _captureFrame,
             ),
             Expanded(

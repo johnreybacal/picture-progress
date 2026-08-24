@@ -5,9 +5,9 @@ import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:path/path.dart' as path;
 
 import '../../core/constants/app_constants.dart';
-import '../../core/utils/pose_alignment_engine.dart';
 import '../../core/utils/timelapse_command_builder.dart';
 import '../models/pose_record.dart';
+import '../models/pose_point.dart';
 import '../models/pose_series.dart';
 import 'file_storage_service.dart';
 
@@ -64,7 +64,7 @@ class TimelapseExportService {
     }
 
     final workspace = await fileStorageService.createExportWorkspace(
-      series.id ?? 0,
+      series,
       exportDirectoryPath: exportDirectoryPath,
     );
     try {
@@ -134,11 +134,8 @@ class TimelapseExportService {
       );
     }
 
-    final aspectRatio = AppConstants.exportWidth / AppConstants.exportHeight;
-
-    final framePlans = <ExportFramePlan>[];
-    for (var index = 0; index < resolvedRecords.length; index++) {
-      final item = resolvedRecords[index];
+    final preparedFrames = <_PreparedFrame>[];
+    for (final item in resolvedRecords) {
       final quarterTurns = item.record.captureOrientation
           .quarterTurnsForDisplay(
             rawWidth: item.imageWidth.round(),
@@ -154,55 +151,69 @@ class TimelapseExportService {
         rawWidth: item.imageWidth.round(),
         rawHeight: item.imageHeight.round(),
       );
-      final displayLandmarks = item.record.displayLandmarks(
-        rawWidth: item.imageWidth.round(),
-        rawHeight: item.imageHeight.round(),
+      final scaleFactor = min(
+        AppConstants.exportWidth / displayWidth,
+        AppConstants.exportHeight / displayHeight,
       );
-      final recordBodyScale = max(
-        PoseGeometry.bodyScaleFor(displayLandmarks),
-        1.0,
+      final fittedWidth = displayWidth * scaleFactor;
+      final fittedHeight = displayHeight * scaleFactor;
+      preparedFrames.add(
+        _PreparedFrame(
+          resolvedRecord: item,
+          quarterTurns: quarterTurns,
+          fittedWidth: fittedWidth,
+          fittedHeight: fittedHeight,
+          anchorInOutput: PosePoint(
+            x: displayAnchor.x * scaleFactor,
+            y: displayAnchor.y * scaleFactor,
+          ),
+        ),
       );
+    }
 
-      var cropHeight = min(
-        max(240.0, recordBodyScale * AppConstants.exportBodyPaddingMultiplier),
-        displayHeight,
-      );
-      var cropWidth = cropHeight * aspectRatio;
+    final baselineFrame = preparedFrames.where(
+      (frame) => frame.record.isReference,
+    );
+    final targetAnchor = baselineFrame.isNotEmpty
+        ? baselineFrame.first.anchorInOutput
+        : PosePoint(
+            x:
+                preparedFrames
+                    .map((frame) => frame.anchorInOutput.x)
+                    .reduce((first, second) => first + second) /
+                preparedFrames.length,
+            y:
+                preparedFrames
+                    .map((frame) => frame.anchorInOutput.y)
+                    .reduce((first, second) => first + second) /
+                preparedFrames.length,
+          );
 
-      if (cropWidth > displayWidth) {
-        cropWidth = displayWidth;
-        cropHeight = cropWidth / aspectRatio;
-      }
-
-      if (cropHeight > displayHeight) {
-        cropHeight = displayHeight;
-        cropWidth = cropHeight * aspectRatio;
-      }
-
-      final maxLeft = max(0.0, displayWidth - cropWidth);
-      final maxTop = max(0.0, displayHeight - cropHeight);
-      final cropLeft =
-          (displayAnchor.x - (AppConstants.targetAnchorX * cropWidth))
-              .clamp(0.0, maxLeft)
-              .toDouble();
-      final cropTop =
-          (displayAnchor.y - (AppConstants.targetAnchorY * cropHeight))
-              .clamp(0.0, maxTop)
-              .toDouble();
+    final framePlans = <ExportFramePlan>[];
+    for (var index = 0; index < preparedFrames.length; index++) {
+      final frame = preparedFrames[index];
+      final centeredLeft = (AppConstants.exportWidth - frame.fittedWidth) / 2;
+      final centeredTop = (AppConstants.exportHeight - frame.fittedHeight) / 2;
+      final desiredLeft =
+          centeredLeft + (targetAnchor.x - frame.anchorInOutput.x);
+      final desiredTop =
+          centeredTop + (targetAnchor.y - frame.anchorInOutput.y);
+      final maxLeft = max(0.0, AppConstants.exportWidth - frame.fittedWidth);
+      final maxTop = max(0.0, AppConstants.exportHeight - frame.fittedHeight);
+      final frameLeft = desiredLeft.clamp(0.0, maxLeft).toDouble();
+      final frameTop = desiredTop.clamp(0.0, maxTop).toDouble();
 
       framePlans.add(
         ExportFramePlan(
-          record: item.record,
-          sourcePath: item.sourcePath,
+          record: frame.record,
+          sourcePath: frame.sourcePath,
           outputPath: path.join(
             framesDirectoryPath,
             'frame_${(index + 1).toString().padLeft(5, '0')}.jpg',
           ),
-          quarterTurns: quarterTurns,
-          cropLeft: cropLeft,
-          cropTop: cropTop,
-          cropWidth: cropWidth,
-          cropHeight: cropHeight,
+          quarterTurns: frame.quarterTurns,
+          frameLeft: frameLeft,
+          frameTop: frameTop,
         ),
       );
     }
@@ -244,6 +255,25 @@ class _ResolvedRecord {
   final String sourcePath;
   final double imageWidth;
   final double imageHeight;
+}
+
+class _PreparedFrame {
+  const _PreparedFrame({
+    required this.resolvedRecord,
+    required this.quarterTurns,
+    required this.fittedWidth,
+    required this.fittedHeight,
+    required this.anchorInOutput,
+  });
+
+  final _ResolvedRecord resolvedRecord;
+  final int quarterTurns;
+  final double fittedWidth;
+  final double fittedHeight;
+  final PosePoint anchorInOutput;
+
+  PoseRecord get record => resolvedRecord.record;
+  String get sourcePath => resolvedRecord.sourcePath;
 }
 
 enum _ExportFormat { mp4, gif }

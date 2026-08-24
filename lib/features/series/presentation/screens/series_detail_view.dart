@@ -65,11 +65,11 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
             itemBuilder: (context) => const [
               PopupMenuItem(
                 value: _SeriesDetailAction.edit,
-                child: Text('Edit series'),
+                child: Text('Rename timeline'),
               ),
               PopupMenuItem(
                 value: _SeriesDetailAction.delete,
-                child: Text('Delete series'),
+                child: Text('Delete timeline'),
               ),
             ],
           ),
@@ -93,7 +93,7 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Series summary',
+                          'Timeline summary',
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                         const SizedBox(height: 10),
@@ -103,11 +103,17 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
                         const SizedBox(height: 6),
                         Text(
                           baseline == null
-                              ? 'Reference baseline not captured yet.'
-                              : 'Baseline ready on ${MaterialLocalizations.of(context).formatShortDate(baseline.timestamp)} with ${baseline.cameraLens.toUpperCase()} lens.',
+                              ? 'Baseline photo not captured yet.'
+                              : 'Baseline photo saved on ${MaterialLocalizations.of(context).formatShortDate(baseline.timestamp)} with the ${baseline.cameraLens == 'front' ? 'front camera' : 'rear camera'}.',
                         ),
+                        if (_series.preferredLens != null) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            'Default camera: ${_series.preferredLens!.label}',
+                          ),
+                        ],
                         const SizedBox(height: 6),
-                        Text('Total captures: ${orderedRecords.length}'),
+                        Text('Total photos: ${orderedRecords.length}'),
                       ],
                     ),
                   ),
@@ -125,8 +131,8 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
                       icon: const Icon(Icons.accessibility_new_rounded),
                       label: Text(
                         baseline == null
-                            ? 'Capture baseline'
-                            : 'Retake baseline',
+                            ? 'Capture baseline photo'
+                            : 'Retake baseline photo',
                       ),
                     ),
                     FilledButton.tonalIcon(
@@ -137,7 +143,7 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
                               baselineRecord: baseline,
                             ),
                       icon: const Icon(Icons.camera_alt_outlined),
-                      label: const Text('Add progress shot'),
+                      label: const Text('Add progress photo'),
                     ),
                     OutlinedButton.icon(
                       onPressed: orderedRecords.isEmpty
@@ -157,7 +163,7 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
                 ),
                 const SizedBox(height: 20),
                 Text(
-                  'Timeline gallery',
+                  'Photo timeline',
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 12),
@@ -166,7 +172,7 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
                     child: Padding(
                       padding: EdgeInsets.all(18),
                       child: Text(
-                        'No captures yet. Save the baseline first, then add aligned progress shots over time.',
+                        'No photos yet. Save the baseline photo first, then add aligned progress photos over time.',
                       ),
                     ),
                   )
@@ -250,11 +256,11 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
     final updatedName = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Edit series name'),
+        title: const Text('Rename timeline'),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(labelText: 'Series label'),
+          decoration: const InputDecoration(labelText: 'Timeline name'),
           onSubmitted: (value) => Navigator.of(context).pop(value.trim()),
         ),
         actions: [
@@ -288,9 +294,9 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
     final shouldDelete = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete series?'),
+        title: const Text('Delete timeline?'),
         content: Text(
-          'This removes ${_series.name}, all stored shots, and the local export cache.',
+          'This removes ${_series.name}, all stored photos, and the local export folders.',
         ),
         actions: [
           TextButton(
@@ -348,13 +354,23 @@ class _RecordTile extends StatelessWidget {
                       children: [
                         if (record.isReference)
                           const Chip(label: Text('Baseline')),
-                        Chip(label: Text(record.cameraLens.toUpperCase())),
-                        Chip(label: Text('${record.landmarks.length} points')),
+                        Chip(
+                          label: Text(
+                            record.cameraLens == 'front'
+                                ? 'Front camera'
+                                : 'Rear camera',
+                          ),
+                        ),
+                        Chip(
+                          label: Text(
+                            '${record.landmarks.length} alignment markers',
+                          ),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      record.label.isEmpty ? 'Untitled capture' : record.label,
+                      record.label.isEmpty ? 'Untitled photo' : record.label,
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 4),
