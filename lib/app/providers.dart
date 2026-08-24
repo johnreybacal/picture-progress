@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app_settings.dart';
+import '../core/utils/dynamic_alignment_service.dart';
+import '../core/utils/rotation_utility.dart';
 import '../core/utils/timelapse_command_builder.dart';
 import '../data/models/pose_record.dart';
 import '../data/models/pose_series.dart';
@@ -22,6 +24,16 @@ final fileStorageServiceProvider = Provider<FileStorageService>((ref) {
   return FileStorageService(
     permissionService: ref.watch(permissionServiceProvider),
   );
+});
+
+final rotationUtilityProvider = Provider<RotationUtility>((ref) {
+  return RotationUtility();
+});
+
+final dynamicAlignmentServiceProvider = Provider<DynamicAlignmentService>((
+  ref,
+) {
+  return const DynamicAlignmentService();
 });
 
 final poseRepositoryProvider = Provider<PoseRepository>((ref) {
@@ -58,13 +70,6 @@ final seriesRecordsProvider = FutureProvider.family<List<PoseRecord>, int>((
   seriesId,
 ) async {
   return ref.watch(poseRepositoryProvider).fetchRecords(seriesId);
-});
-
-final seriesBaselineProvider = FutureProvider.family<PoseRecord?, int>((
-  ref,
-  seriesId,
-) async {
-  return ref.watch(poseRepositoryProvider).fetchBaselineRecord(seriesId);
 });
 
 final appSettingsProvider =
@@ -128,12 +133,12 @@ class AppSettingsController extends StateNotifier<AppSettings> {
     state = state.copyWith(autoCaptureDelay: delay);
   }
 
-  void setBaselineOverlayEnabled(bool enabled) {
-    state = state.copyWith(showBaselineOverlay: enabled);
+  void setReferenceOverlayEnabled(bool enabled) {
+    state = state.copyWith(showReferenceOverlay: enabled);
   }
 
-  void setBaselineOverlayOpacity(double opacity) {
-    state = state.copyWith(baselineOverlayOpacity: opacity);
+  void setReferenceOverlayOpacity(double opacity) {
+    state = state.copyWith(referenceOverlayOpacity: opacity);
   }
 
   void setPhotoStorageDirectoryPath(String photoStorageDirectoryPath) {

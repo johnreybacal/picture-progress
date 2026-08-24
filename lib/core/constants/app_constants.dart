@@ -10,7 +10,7 @@ class AppConstants {
   static const Duration defaultAutoCaptureDelay = Duration(milliseconds: 1400);
   static const Duration minimumAutoCaptureDelay = Duration(milliseconds: 500);
   static const Duration maximumAutoCaptureDelay = Duration(milliseconds: 2500);
-  static const double defaultBaselineOverlayOpacity = 0.42;
+  static const double defaultReferenceOverlayOpacity = 0.42;
   static const double defaultLandmarkSmoothingFactor = 0.32;
   static const double defaultZoomLevel = 1.0;
   static const int defaultTimelapseFps = 8;

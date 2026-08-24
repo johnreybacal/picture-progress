@@ -171,23 +171,18 @@ class TimelapseExportService {
       );
     }
 
-    final baselineFrame = preparedFrames.where(
-      (frame) => frame.record.isReference,
+    final targetAnchor = PosePoint(
+      x:
+          preparedFrames
+              .map((frame) => frame.anchorInOutput.x)
+              .reduce((first, second) => first + second) /
+          preparedFrames.length,
+      y:
+          preparedFrames
+              .map((frame) => frame.anchorInOutput.y)
+              .reduce((first, second) => first + second) /
+          preparedFrames.length,
     );
-    final targetAnchor = baselineFrame.isNotEmpty
-        ? baselineFrame.first.anchorInOutput
-        : PosePoint(
-            x:
-                preparedFrames
-                    .map((frame) => frame.anchorInOutput.x)
-                    .reduce((first, second) => first + second) /
-                preparedFrames.length,
-            y:
-                preparedFrames
-                    .map((frame) => frame.anchorInOutput.y)
-                    .reduce((first, second) => first + second) /
-                preparedFrames.length,
-          );
 
     final framePlans = <ExportFramePlan>[];
     for (var index = 0; index < preparedFrames.length; index++) {

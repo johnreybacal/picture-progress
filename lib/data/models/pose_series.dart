@@ -1,6 +1,4 @@
-import 'dart:convert';
-
-import 'baseline_pose_metadata.dart';
+import 'capture_viewport_ratio.dart';
 import 'lens_facing.dart';
 
 class PoseSeries {
@@ -9,50 +7,53 @@ class PoseSeries {
     required this.name,
     required this.createdAt,
     required this.thumbnailPath,
-    this.baselineMetadata,
     this.preferredLens,
+    this.lastUsedZoomLevel,
+    this.lastUsedAspectRatio = CaptureViewportRatio.full,
   });
 
   final int? id;
   final String name;
   final DateTime createdAt;
   final String thumbnailPath;
-  final BaselinePoseMetadata? baselineMetadata;
   final LensFacing? preferredLens;
+  final double? lastUsedZoomLevel;
+  final CaptureViewportRatio lastUsedAspectRatio;
 
   PoseSeries copyWith({
     int? id,
     String? name,
     DateTime? createdAt,
     String? thumbnailPath,
-    BaselinePoseMetadata? baselineMetadata,
     LensFacing? preferredLens,
+    double? lastUsedZoomLevel,
+    CaptureViewportRatio? lastUsedAspectRatio,
   }) {
     return PoseSeries(
       id: id ?? this.id,
       name: name ?? this.name,
       createdAt: createdAt ?? this.createdAt,
       thumbnailPath: thumbnailPath ?? this.thumbnailPath,
-      baselineMetadata: baselineMetadata ?? this.baselineMetadata,
       preferredLens: preferredLens ?? this.preferredLens,
+      lastUsedZoomLevel: lastUsedZoomLevel ?? this.lastUsedZoomLevel,
+      lastUsedAspectRatio: lastUsedAspectRatio ?? this.lastUsedAspectRatio,
     );
   }
 
   factory PoseSeries.fromDatabaseMap(Map<String, Object?> map) {
-    final baselineMetadataJson = map['baseline_metadata_json'] as String? ?? '';
+    final storedZoomLevel = (map['last_used_zoom_level'] as num?)?.toDouble();
     return PoseSeries(
       id: map['id'] as int?,
       name: map['name'] as String,
       createdAt: DateTime.fromMillisecondsSinceEpoch(map['created_at'] as int),
       thumbnailPath: map['thumbnail_path'] as String? ?? '',
       preferredLens: LensFacing.fromStorage(map['preferred_lens'] as String?),
-      baselineMetadata: baselineMetadataJson.isEmpty
+      lastUsedZoomLevel: storedZoomLevel == null || storedZoomLevel <= 0
           ? null
-          : BaselinePoseMetadata.fromJson(
-              Map<String, dynamic>.from(
-                jsonDecode(baselineMetadataJson) as Map<dynamic, dynamic>,
-              ),
-            ),
+          : storedZoomLevel,
+      lastUsedAspectRatio: CaptureViewportRatio.fromStorage(
+        map['last_used_aspect_ratio'] as String?,
+      ),
     );
   }
 
@@ -63,9 +64,8 @@ class PoseSeries {
       'created_at': createdAt.millisecondsSinceEpoch,
       'thumbnail_path': thumbnailPath,
       'preferred_lens': preferredLens?.storageValue ?? '',
-      'baseline_metadata_json': baselineMetadata == null
-          ? ''
-          : jsonEncode(baselineMetadata!.toJson()),
+      'last_used_zoom_level': lastUsedZoomLevel ?? 0,
+      'last_used_aspect_ratio': lastUsedAspectRatio.storageValue,
     };
   }
 }

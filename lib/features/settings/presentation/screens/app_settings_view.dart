@@ -115,11 +115,11 @@ class AppSettingsView extends ConsumerWidget {
             const SizedBox(height: 16),
             Card(
               child: SwitchListTile.adaptive(
-                value: settings.showBaselineOverlay,
-                onChanged: controller.setBaselineOverlayEnabled,
-                title: const Text('Show baseline guide overlay'),
+                value: settings.showReferenceOverlay,
+                onChanged: controller.setReferenceOverlayEnabled,
+                title: const Text('Show guide overlay'),
                 subtitle: const Text(
-                  'Draw the saved baseline guide on top of the live camera feed so positioning is easier before each photo.',
+                  'Draw the latest saved guide pose on top of the live camera feed so positioning is easier before each photo.',
                 ),
               ),
             ),
@@ -127,22 +127,23 @@ class AppSettingsView extends ConsumerWidget {
             _SettingCard(
               title: 'Guide overlay opacity',
               subtitle: 'Adjust how visible the saved guide appears over the camera preview.',
-              valueLabel: '${(settings.baselineOverlayOpacity * 100).round()}%',
+              valueLabel:
+                  '${(settings.referenceOverlayOpacity * 100).round()}%',
               child: Slider.adaptive(
-                value: settings.baselineOverlayOpacity,
+                value: settings.referenceOverlayOpacity,
                 min: 0,
                 max: 1,
                 divisions: 20,
-                label: '${(settings.baselineOverlayOpacity * 100).round()}%',
-                onChanged: settings.showBaselineOverlay
-                    ? controller.setBaselineOverlayOpacity
+                label: '${(settings.referenceOverlayOpacity * 100).round()}%',
+                onChanged: settings.showReferenceOverlay
+                    ? controller.setReferenceOverlayOpacity
                     : null,
               ),
             ),
             const SizedBox(height: 16),
             _SettingCard(
               title: 'Alignment sensitivity',
-              subtitle: 'Higher values demand a closer match to the baseline photo before auto-capture can start.',
+              subtitle: 'Higher values demand a closer match to the latest saved photo before auto-capture can start.',
               valueLabel: '${settings.alignmentThreshold.round()}%',
               child: Slider.adaptive(
                 value: settings.alignmentThreshold,

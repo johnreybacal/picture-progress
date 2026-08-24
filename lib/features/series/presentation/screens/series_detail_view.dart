@@ -10,6 +10,10 @@ import '../../../export/presentation/screens/export_preview_page.dart';
 import '../../../settings/presentation/screens/app_settings_view.dart';
 import 'progress_shot_detail_view.dart';
 
+class TimelineDetailView extends SeriesDetailView {
+  const TimelineDetailView({super.key, required super.initialSeries});
+}
+
 class SeriesDetailView extends ConsumerStatefulWidget {
   const SeriesDetailView({super.key, required this.initialSeries});
 
@@ -31,9 +35,13 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
   @override
   Widget build(BuildContext context) {
     final recordsAsync = ref.watch(seriesRecordsProvider(_series.id!));
-    final baselineAsync = ref.watch(seriesBaselineProvider(_series.id!));
-    final baseline = baselineAsync.maybeWhen(
-      data: (value) => value,
+    final dynamicAlignmentService = ref.read(dynamicAlignmentServiceProvider);
+    final hasRecords = recordsAsync.maybeWhen(
+      data: (records) => records.isNotEmpty,
+      orElse: () => false,
+    );
+    final latestReference = recordsAsync.maybeWhen(
+      data: dynamicAlignmentService.resolveReferenceRecord,
       orElse: () => null,
     );
 
@@ -41,6 +49,20 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
       appBar: AppBar(
         title: Text(_series.name),
         actions: [
+          IconButton(
+            onPressed: hasRecords
+                ? () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            TimelapseExportView(series: _series),
+                      ),
+                    );
+                  }
+                : null,
+            icon: const Icon(Icons.ios_share_rounded),
+            tooltip: 'Export',
+          ),
           IconButton(
             onPressed: () {
               Navigator.of(context).push(
@@ -75,6 +97,14 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
           ),
         ],
       ),
+      floatingActionButton: recordsAsync.maybeWhen(
+        data: (_) => FloatingActionButton.extended(
+          onPressed: () => _openCamera(referenceRecord: latestReference),
+          icon: const Icon(Icons.add_a_photo_outlined),
+          label: Text(hasRecords ? 'Add photo' : 'First photo'),
+        ),
+        orElse: () => null,
+      ),
       body: SafeArea(
         child: recordsAsync.when(
           data: (records) {
@@ -93,7 +123,7 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Timeline summary',
+                          'Overview',
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                         const SizedBox(height: 10),
@@ -102,16 +132,10 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          baseline == null
-                              ? 'Baseline photo not captured yet.'
-                              : 'Baseline photo saved on ${MaterialLocalizations.of(context).formatShortDate(baseline.timestamp)} with the ${baseline.cameraLens == 'front' ? 'front camera' : 'rear camera'}.',
+                          orderedRecords.isEmpty
+                              ? 'Take the first photo. After that, each new capture lines up to your latest saved frame.'
+                              : 'Last update ${MaterialLocalizations.of(context).formatShortDate(orderedRecords.last.timestamp)} at ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(orderedRecords.last.timestamp))}.',
                         ),
-                        if (_series.preferredLens != null) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            'Default camera: ${_series.preferredLens!.label}',
-                          ),
-                        ],
                         const SizedBox(height: 6),
                         Text('Total photos: ${orderedRecords.length}'),
                       ],
@@ -119,49 +143,40 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: () => _openCamera(
-                        isBaselineCapture: true,
-                        baselineRecord: baseline,
-                      ),
-                      icon: const Icon(Icons.accessibility_new_rounded),
-                      label: Text(
-                        baseline == null
-                            ? 'Capture baseline photo'
-                            : 'Retake baseline photo',
-                      ),
-                    ),
-                    FilledButton.tonalIcon(
-                      onPressed: baseline == null
-                          ? null
-                          : () => _openCamera(
-                              isBaselineCapture: false,
-                              baselineRecord: baseline,
-                            ),
-                      icon: const Icon(Icons.camera_alt_outlined),
-                      label: const Text('Add progress photo'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: orderedRecords.isEmpty
-                          ? null
-                          : () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) =>
-                                      TimelapseExportView(series: _series),
+                if (orderedRecords.isEmpty)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(18),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Main action',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleMedium,
                                 ),
-                              );
-                            },
-                      icon: const Icon(Icons.movie_filter_outlined),
-                      label: const Text('Preview export'),
+                                const SizedBox(height: 8),
+                                const Text(
+                                  'Capture the first photo to start this timeline. Every later shot will use the most recent saved frame as the guide.',
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          FilledButton.icon(
+                            onPressed: () => _openCamera(referenceRecord: null),
+                            icon: const Icon(Icons.camera_alt_outlined),
+                            label: const Text('Take first photo'),
+                          ),
+                        ],
+                      ),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 20),
+                  ),
+                if (orderedRecords.isEmpty) const SizedBox(height: 20),
                 Text(
                   'Photo timeline',
                   style: Theme.of(context).textTheme.titleLarge,
@@ -172,7 +187,7 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
                     child: Padding(
                       padding: EdgeInsets.all(18),
                       child: Text(
-                        'No photos yet. Save the baseline photo first, then add aligned progress photos over time.',
+                        'No photos yet. Save the first photo, then add aligned progress photos over time.',
                       ),
                     ),
                   )
@@ -201,22 +216,15 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
     );
   }
 
-  Future<void> _openCamera({
-    required bool isBaselineCapture,
-    required PoseRecord? baselineRecord,
-  }) async {
+  Future<void> _openCamera({required PoseRecord? referenceRecord}) async {
     final didCapture = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (context) => CameraView(
-          series: _series,
-          isBaselineCapture: isBaselineCapture,
-          baselineRecord: baselineRecord,
-        ),
+        builder: (context) =>
+            CameraView(series: _series, referenceRecord: referenceRecord),
       ),
     );
     if (didCapture == true) {
       ref.invalidate(seriesRecordsProvider(_series.id!));
-      ref.invalidate(seriesBaselineProvider(_series.id!));
       await ref.read(seriesListControllerProvider.notifier).refresh();
       final updatedSeries = await ref
           .read(poseRepositoryProvider)
@@ -238,7 +246,6 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
     );
     if (didChange == true) {
       ref.invalidate(seriesRecordsProvider(_series.id!));
-      ref.invalidate(seriesBaselineProvider(_series.id!));
       await ref.read(seriesListControllerProvider.notifier).refresh();
       final updatedSeries = await ref
           .read(poseRepositoryProvider)
@@ -341,50 +348,37 @@ class _RecordTile extends StatelessWidget {
               SizedBox(
                 width: 92,
                 height: 124,
-                child: PoseThumbnail(record: record),
+                child: PoseThumbnail(
+                  record: record,
+                  skeletonOverlayOpacity: 0.18,
+                ),
               ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        if (record.isReference)
-                          const Chip(label: Text('Baseline')),
-                        Chip(
-                          label: Text(
-                            record.cameraLens == 'front'
-                                ? 'Front camera'
-                                : 'Rear camera',
-                          ),
-                        ),
-                        Chip(
-                          label: Text(
-                            '${record.landmarks.length} alignment markers',
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
                     Text(
-                      record.label.isEmpty ? 'Untitled photo' : record.label,
+                      MaterialLocalizations.of(context)
+                          .formatMediumDate(record.timestamp),
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      MaterialLocalizations.of(context)
-                          .formatFullDate(record.timestamp),
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
                       MaterialLocalizations.of(context).formatTimeOfDay(
                         TimeOfDay.fromDateTime(record.timestamp),
                       ),
+                      style: Theme.of(context).textTheme.bodyMedium,
                     ),
+                    if (record.label.trim().isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        record.label,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ],
                   ],
                 ),
               ),

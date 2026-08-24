@@ -298,7 +298,7 @@ class _TimelapseExportViewState extends ConsumerState<TimelapseExportView> {
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              'Each frame is rotated upright if needed, translated around the baseline body center, and rendered full-frame at $_resolvedFps FPS without zoom cropping.',
+                              'Each frame is rotated upright if needed, translated around a shared body center, and rendered full-frame at $_resolvedFps FPS without zoom cropping.',
                             ),
                             const SizedBox(height: 16),
                             Row(

@@ -63,7 +63,7 @@ class SeriesHomeView extends ConsumerWidget {
                           ),
                           const SizedBox(height: 10),
                           const Text(
-                            'Create a timeline for posture, outfits, growth, or visual check-ins. Save one baseline photo, add matching updates over time, and export a clean comparison video when you are ready.',
+                            'Create a timeline for posture, outfits, growth, or visual check-ins. Take a first photo, add matching updates over time, and export a clean comparison video when you are ready.',
                           ),
                         ],
                       ),
@@ -124,8 +124,7 @@ class SeriesHomeView extends ConsumerWidget {
 
     await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (context) =>
-            CameraView(series: createdSeries, isBaselineCapture: true),
+        builder: (context) => CameraView(series: createdSeries),
       ),
     );
 
@@ -133,7 +132,6 @@ class SeriesHomeView extends ConsumerWidget {
       return;
     }
 
-    ref.invalidate(seriesBaselineProvider(createdSeries.id!));
     ref.invalidate(seriesRecordsProvider(createdSeries.id!));
     await ref.read(seriesListControllerProvider.notifier).refresh();
   }
@@ -300,25 +298,15 @@ class _SeriesCard extends ConsumerWidget {
                     Text(
                       'Created ${MaterialLocalizations.of(context).formatShortDate(series.createdAt)}',
                     ),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        Chip(
-                          label: Text(
-                            series.baselineMetadata == null
-                                ? 'Baseline needed'
-                                : 'Baseline ready',
-                          ),
-                        ),
-                        if (series.preferredLens != null)
-                          Chip(
-                            label: Text(
-                              'Default: ${series.preferredLens!.label.toLowerCase()}',
-                            ),
-                          ),
-                      ],
+                    const SizedBox(height: 8),
+                    recordsAsync.maybeWhen(
+                      data: (records) => Text(
+                        records.isEmpty
+                            ? 'No photos yet'
+                            : '${records.length} photos',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      orElse: () => const Text('Loading photos...'),
                     ),
                   ],
                 ),
@@ -364,7 +352,7 @@ class _SeriesPreview extends StatelessWidget {
               ),
               child: Icon(Icons.photo_library_outlined, size: 34),
             )
-          : PoseThumbnail(record: thumbnailRecord),
+          : PoseThumbnail(record: thumbnailRecord, skeletonOverlayOpacity: 0.2),
     );
   }
 }

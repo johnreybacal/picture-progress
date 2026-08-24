@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
@@ -11,26 +10,24 @@ import '../../../../app/app_settings.dart';
 import '../../../../app/providers.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/utils/accuracy_debouncer.dart';
+import '../../../../core/utils/dynamic_alignment_service.dart';
 import '../../../../core/utils/landmark_smoother.dart';
 import '../../../../core/utils/pose_alignment_engine.dart';
-import '../../../../core/widgets/baseline_template_painter.dart';
+import '../../../../core/utils/rotation_utility.dart';
+import '../../../../core/widgets/camera_preview_viewport.dart';
 import '../../../../core/widgets/pose_skeleton_painter.dart';
-import '../../../../data/models/capture_orientation.dart';
+import '../../../../core/widgets/reference_guide_painter.dart';
+import '../../../../data/models/capture_viewport_ratio.dart';
+import '../../../../data/models/lens_facing.dart';
 import '../../../../data/models/pose_landmark_point.dart';
 import '../../../../data/models/pose_record.dart';
 import '../../../../data/models/pose_series.dart';
 
 class CameraView extends ConsumerStatefulWidget {
-  const CameraView({
-    super.key,
-    required this.series,
-    required this.isBaselineCapture,
-    this.baselineRecord,
-  });
+  const CameraView({super.key, required this.series, this.referenceRecord});
 
   final PoseSeries series;
-  final bool isBaselineCapture;
-  final PoseRecord? baselineRecord;
+  final PoseRecord? referenceRecord;
 
   @override
   ConsumerState<CameraView> createState() => _CameraViewState();
@@ -47,6 +44,8 @@ class _CameraViewState extends ConsumerState<CameraView> {
   late final PoseDetector _streamPoseDetector;
   late final LandmarkSmoother _landmarkSmoother;
   late final AccuracyDebouncer _accuracyDebouncer;
+  late final DynamicAlignmentService _dynamicAlignmentService;
+  late final RotationUtility _rotationUtility;
 
   List<CameraDescription> _availableCameras = const [];
   CameraController? _cameraController;
@@ -68,11 +67,25 @@ class _CameraViewState extends ConsumerState<CameraView> {
   double _maxZoomLevel = AppConstants.defaultZoomLevel;
   double _zoomLevel = AppConstants.defaultZoomLevel;
   double _baseZoomLevel = AppConstants.defaultZoomLevel;
+  double? _seriesZoomPreference;
+  LensFacing? _seriesLensPreference;
+  late CaptureViewportRatio _viewportRatio;
+  Timer? _seriesPreferencesSaveTimer;
 
   bool get _canAutoCapture {
-    return !widget.isBaselineCapture &&
-        widget.baselineRecord != null &&
-        widget.baselineRecord!.landmarks.isNotEmpty;
+    return widget.referenceRecord != null &&
+        widget.referenceRecord!.landmarks.isNotEmpty;
+  }
+
+  bool get _supportsUltraWide => _minZoomLevel <= 0.65;
+
+  double get _minimumSelectableZoom {
+    if (_supportsUltraWide) {
+      return _minZoomLevel;
+    }
+    return _minZoomLevel > AppConstants.defaultZoomLevel
+        ? _minZoomLevel
+        : AppConstants.defaultZoomLevel;
   }
 
   @override
@@ -83,6 +96,11 @@ class _CameraViewState extends ConsumerState<CameraView> {
       alpha: AppConstants.defaultAccuracyDebounceAlpha,
       updateInterval: AppConstants.accuracyDebounceInterval,
     );
+    _dynamicAlignmentService = ref.read(dynamicAlignmentServiceProvider);
+    _rotationUtility = ref.read(rotationUtilityProvider);
+    _seriesZoomPreference = widget.series.lastUsedZoomLevel;
+    _seriesLensPreference = widget.series.preferredLens;
+    _viewportRatio = widget.series.lastUsedAspectRatio;
     _streamPoseDetector = PoseDetector(
       options: PoseDetectorOptions(
         model: PoseDetectionModel.base,
@@ -96,6 +114,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
   void dispose() {
     _landmarkSmoother.reset();
     _accuracyDebouncer.reset();
+    _seriesPreferencesSaveTimer?.cancel();
     unawaited(_cameraController?.dispose());
     unawaited(_streamPoseDetector.close());
     super.dispose();
@@ -109,8 +128,8 @@ class _CameraViewState extends ConsumerState<CameraView> {
       }
 
       final preferredLensDirection =
-          widget.series.preferredLens?.cameraLensDirection ??
-          (widget.baselineRecord?.cameraLens == CameraLensDirection.back.name
+          _seriesLensPreference?.cameraLensDirection ??
+          (widget.referenceRecord?.cameraLens == CameraLensDirection.back.name
               ? CameraLensDirection.back
               : CameraLensDirection.front);
       final preferredIndex = cameras.indexWhere(
@@ -160,7 +179,15 @@ class _CameraViewState extends ConsumerState<CameraView> {
 
     final minZoom = await controller.getMinZoomLevel();
     final maxZoom = await controller.getMaxZoomLevel();
-    final zoom = _zoomLevel.clamp(minZoom, maxZoom).toDouble();
+    final minimumSelectableZoom = minZoom <= 0.65
+        ? minZoom
+        : (minZoom > AppConstants.defaultZoomLevel
+              ? minZoom
+              : AppConstants.defaultZoomLevel);
+    final desiredZoom = previousController == null
+        ? (_seriesZoomPreference ?? AppConstants.defaultZoomLevel)
+        : (_seriesZoomPreference ?? _zoomLevel);
+    final zoom = desiredZoom.clamp(minimumSelectableZoom, maxZoom).toDouble();
 
     await controller.setZoomLevel(zoom);
     await controller.startImageStream(_processCameraFrame);
@@ -172,6 +199,10 @@ class _CameraViewState extends ConsumerState<CameraView> {
 
     _landmarkSmoother.reset();
     _accuracyDebouncer.reset();
+    _seriesZoomPreference = zoom;
+    _seriesLensPreference = LensFacing.fromCameraLensDirection(
+      description.lensDirection,
+    );
     setState(() {
       _cameraController = controller;
       _minZoomLevel = minZoom;
@@ -183,6 +214,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
       _displayedAlignmentScore = 0;
       _initializing = false;
     });
+    _scheduleSeriesPreferencesSave();
   }
 
   Future<void> _switchCamera() async {
@@ -192,6 +224,9 @@ class _CameraViewState extends ConsumerState<CameraView> {
 
     final nextIndex = (_selectedCameraIndex + 1) % _availableCameras.length;
     _selectedCameraIndex = nextIndex;
+    _seriesLensPreference = LensFacing.fromCameraLensDirection(
+      _availableCameras[_selectedCameraIndex].lensDirection,
+    );
     await _startCamera(_availableCameras[_selectedCameraIndex]);
   }
 
@@ -233,19 +268,15 @@ class _CameraViewState extends ConsumerState<CameraView> {
       }
 
       final poseMotion = _landmarkSmoother.lastAverageMotion;
-      final mirrorBaseline =
-          _canAutoCapture &&
-          widget.baselineRecord!.cameraLens !=
-              controller.description.lensDirection.name;
-      final alignmentResult = _canAutoCapture
-          ? PoseAlignmentEngine.compare(
+      final alignmentComparison = _canAutoCapture
+          ? _dynamicAlignmentService.compareToReference(
               liveLandmarks: landmarks,
-              referenceLandmarks: widget.baselineRecord!.landmarks,
-              mirrorReferenceHorizontally: mirrorBaseline,
+              referenceRecord: widget.referenceRecord!,
+              activeLensDirection: controller.description.lensDirection,
             )
-          : const PoseAlignmentResult.empty();
+          : const DynamicAlignmentComparison.empty();
       final displayedAlignmentScore = _canAutoCapture
-          ? _accuracyDebouncer.update(alignmentResult.score)
+          ? _accuracyDebouncer.update(alignmentComparison.alignment.score)
           : 0.0;
 
       setState(() {
@@ -318,21 +349,25 @@ class _CameraViewState extends ConsumerState<CameraView> {
         await controller.stopImageStream();
       }
 
+      final sensedOrientation = controller.value.deviceOrientation;
       final xFile = await controller.takePicture();
       final fileStorage = ref.read(fileStorageServiceProvider);
       final repository = ref.read(poseRepositoryProvider);
       final settings = ref.read(appSettingsProvider);
-      final captureOrientation = _captureOrientationForDevice(
-        controller.value.deviceOrientation,
+      final captureResult = await _rotationUtility.transformJpegForStorage(
+        jpegBytes: await File(xFile.path).readAsBytes(),
+        fallbackOrientation: sensedOrientation,
       );
-      final relativePath = await fileStorage.persistCameraCapture(
-        xFile,
+      final relativePath = await fileStorage.persistCaptureBytes(
+        captureResult.bytes,
         seriesId: widget.series.id!,
-        captureOrientation: captureOrientation,
         preferredRootPath: settings.photoStorageDirectoryPath.isEmpty
             ? null
             : settings.photoStorageDirectoryPath,
       );
+      try {
+        await File(xFile.path).delete();
+      } catch (_) {}
       final absolutePath = await fileStorage.resolveAbsolutePath(relativePath);
       final dimensions = await fileStorage.readImageDimensions(absolutePath);
       final detectedLandmarks = await _detectLandmarksInSavedImage(
@@ -349,20 +384,20 @@ class _CameraViewState extends ConsumerState<CameraView> {
       await repository.addRecord(
         seriesId: widget.series.id!,
         imagePath: relativePath,
-        label: widget.isBaselineCapture ? 'Baseline' : '',
+        label: '',
         timestamp: DateTime.now(),
         landmarks: landmarks,
         boundingBox: PoseGeometry.boundingBoxFor(landmarks),
         anchorCenter: PoseGeometry.anchorFor(landmarks),
         cameraLens: controller.description.lensDirection.name,
-        captureOrientation: captureOrientation,
+        captureOrientation: captureResult.storedOrientation,
         imageWidth: dimensions.width,
         imageHeight: dimensions.height,
-        baselinePose: widget.isBaselineCapture,
+        captureZoomLevel: _zoomLevel,
+        captureViewportRatio: _viewportRatio,
       );
 
       ref.invalidate(seriesRecordsProvider(widget.series.id!));
-      ref.invalidate(seriesBaselineProvider(widget.series.id!));
       await ref.read(seriesListControllerProvider.notifier).refresh();
       shouldRestartStream = false;
 
@@ -469,33 +504,72 @@ class _CameraViewState extends ConsumerState<CameraView> {
     );
   }
 
-  CaptureOrientation _captureOrientationForDevice(
-    DeviceOrientation orientation,
-  ) {
-    switch (orientation) {
-      case DeviceOrientation.landscapeLeft:
-        return CaptureOrientation.landscapeLeft;
-      case DeviceOrientation.landscapeRight:
-        return CaptureOrientation.landscapeRight;
-      case DeviceOrientation.portraitUp:
-      case DeviceOrientation.portraitDown:
-        return CaptureOrientation.portrait;
-    }
-  }
-
   Future<void> _setZoomLevel(double zoom) async {
     final controller = _cameraController;
     if (controller == null || !controller.value.isInitialized) {
       return;
     }
 
-    final clampedZoom = zoom.clamp(_minZoomLevel, _maxZoomLevel).toDouble();
+    final clampedZoom = zoom
+        .clamp(_minimumSelectableZoom, _maxZoomLevel)
+        .toDouble();
     await controller.setZoomLevel(clampedZoom);
     if (!mounted) {
       return;
     }
+    _seriesZoomPreference = clampedZoom;
     setState(() {
       _zoomLevel = clampedZoom;
+    });
+    _scheduleSeriesPreferencesSave();
+  }
+
+  void _setViewportRatio(CaptureViewportRatio viewportRatio) {
+    if (_viewportRatio == viewportRatio) {
+      return;
+    }
+
+    setState(() {
+      _viewportRatio = viewportRatio;
+    });
+    _scheduleSeriesPreferencesSave();
+  }
+
+  List<double> _zoomPresets() {
+    final presets = <double>[
+      if (_supportsUltraWide) 0.6,
+      1.0,
+      if (_maxZoomLevel >= 2.0) 2.0,
+    ];
+    return presets
+        .where(
+          (value) =>
+              value >= _minimumSelectableZoom - 0.01 && value <= _maxZoomLevel,
+        )
+        .toList(growable: false);
+  }
+
+  void _scheduleSeriesPreferencesSave() {
+    final seriesId = widget.series.id;
+    final controller = _cameraController;
+    if (seriesId == null || controller == null) {
+      return;
+    }
+
+    _seriesPreferencesSaveTimer?.cancel();
+    _seriesPreferencesSaveTimer = Timer(const Duration(milliseconds: 220), () {
+      unawaited(
+        ref
+            .read(poseRepositoryProvider)
+            .updateSeriesCapturePreferences(
+              seriesId,
+              preferredLens: LensFacing.fromCameraLensDirection(
+                controller.description.lensDirection,
+              ),
+              lastUsedZoomLevel: _seriesZoomPreference ?? _zoomLevel,
+              lastUsedAspectRatio: _viewportRatio,
+            ),
+      );
     });
   }
 
@@ -560,8 +634,8 @@ class _CameraViewState extends ConsumerState<CameraView> {
                           Expanded(
                             child: _InfoPill(
                               title: widget.series.name,
-                              subtitle: widget.isBaselineCapture
-                                  ? 'Save a clean full-body baseline frame.'
+                              subtitle: widget.referenceRecord == null
+                                  ? 'Capture the first photo for this timeline. Later shots will line up to it.'
                                   : _statusMessage(settings),
                             ),
                           ),
@@ -603,14 +677,13 @@ class _CameraViewState extends ConsumerState<CameraView> {
     final orientedPreviewSize = previewSize.height > previewSize.width
         ? previewSize
         : Size(previewSize.height, previewSize.width);
-    final shouldShowBaselineGuide =
+    final shouldShowReferenceGuide =
         !_capturing &&
-        !widget.isBaselineCapture &&
-        widget.baselineRecord != null &&
-        settings.showBaselineOverlay;
-    final mirrorBaselineGuide =
-        shouldShowBaselineGuide &&
-        widget.baselineRecord!.cameraLens !=
+        widget.referenceRecord != null &&
+        settings.showReferenceOverlay;
+    final mirrorReferenceGuide =
+        shouldShowReferenceGuide &&
+        widget.referenceRecord!.cameraLens !=
             controller.description.lensDirection.name;
 
     return GestureDetector(
@@ -623,7 +696,8 @@ class _CameraViewState extends ConsumerState<CameraView> {
         }
         unawaited(_setZoomLevel(_baseZoomLevel * details.scale));
       },
-      child: SizedBox.expand(
+      child: CameraPreviewViewport(
+        viewportRatio: _viewportRatio,
         child: ClipRect(
           child: FittedBox(
             fit: BoxFit.cover,
@@ -634,18 +708,18 @@ class _CameraViewState extends ConsumerState<CameraView> {
                 fit: StackFit.expand,
                 children: [
                   CameraPreview(controller),
-                  if (shouldShowBaselineGuide)
+                  if (shouldShowReferenceGuide)
                     IgnorePointer(
                       child: CustomPaint(
-                        painter: BaselineGuidePainter(
-                          baselineRecord: widget.baselineRecord!,
+                        painter: ReferenceGuidePainter(
+                          referenceRecord: widget.referenceRecord!,
                           liveLandmarks: _latestLandmarks,
                           liveImageSize: _latestFrameSize,
                           liveRotation: _latestFrameRotation,
                           cameraLensDirection:
                               controller.description.lensDirection,
-                          opacity: settings.baselineOverlayOpacity,
-                          mirrorHorizontally: mirrorBaselineGuide,
+                          opacity: settings.referenceOverlayOpacity,
+                          mirrorHorizontally: mirrorReferenceGuide,
                         ),
                       ),
                     ),
@@ -683,14 +757,14 @@ class _CameraViewState extends ConsumerState<CameraView> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (!widget.isBaselineCapture)
+        if (widget.referenceRecord != null)
           _CaptureStatusCard(
             score: _displayedAlignmentScore,
             statusText: _statusMessage(settings),
             progress: autoCaptureProgress,
             showProgress: showProgress,
           ),
-        if (!widget.isBaselineCapture) const SizedBox(height: 14),
+        if (widget.referenceRecord != null) const SizedBox(height: 14),
         DecoratedBox(
           decoration: BoxDecoration(
             color: Colors.black.withValues(alpha: 0.58),
@@ -720,6 +794,34 @@ class _CameraViewState extends ConsumerState<CameraView> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: CaptureViewportRatio.values
+                      .map(
+                        (viewportRatio) => ChoiceChip(
+                          label: Text(viewportRatio.label),
+                          selected: _viewportRatio == viewportRatio,
+                          onSelected: (_) => _setViewportRatio(viewportRatio),
+                        ),
+                      )
+                      .toList(growable: false),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: _zoomPresets()
+                      .map(
+                        (preset) => ChoiceChip(
+                          label: Text('${preset.toStringAsFixed(1)}x'),
+                          selected: (_zoomLevel - preset).abs() < 0.05,
+                          onSelected: (_) => unawaited(_setZoomLevel(preset)),
+                        ),
+                      )
+                      .toList(growable: false),
+                ),
                 SliderTheme(
                   data: SliderTheme.of(context).copyWith(
                     trackHeight: 3,
@@ -732,7 +834,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
                   ),
                   child: Slider(
                     value: _zoomLevel,
-                    min: _minZoomLevel,
+                    min: _minimumSelectableZoom,
                     max: _maxZoomLevel,
                     onChanged: (value) => unawaited(_setZoomLevel(value)),
                   ),
@@ -747,8 +849,8 @@ class _CameraViewState extends ConsumerState<CameraView> {
             const Expanded(child: SizedBox()),
             _ShutterButton(
               busy: _capturing,
-              semanticLabel: widget.isBaselineCapture
-                  ? 'Save baseline photo'
+              semanticLabel: widget.referenceRecord == null
+                  ? 'Capture first photo'
                   : 'Capture progress photo',
               onPressed: _capturing ? null : _captureFrame,
             ),
@@ -773,14 +875,17 @@ class _CameraViewState extends ConsumerState<CameraView> {
     if (_latestLandmarks.isEmpty) {
       return 'Step back until shoulders, hips, knees, and feet are visible.';
     }
+    if (widget.referenceRecord == null) {
+      return 'Frame the first photo and use the shutter when you are ready.';
+    }
     if (!_canAutoCapture || !settings.autoCaptureEnabled) {
-      return 'Frame the pose, then trigger the shutter manually.';
+      return 'Frame the photo and use the shutter when you are ready.';
     }
     if (_displayedAlignmentScore < settings.alignmentThreshold) {
-      return 'Match the baseline stance before auto-capture arms.';
+      return 'Match the latest photo before auto-capture begins.';
     }
     if (_poseMotion > settings.stabilitySensitivity) {
-      return 'Hold still. Auto-capture waits for the pose to settle.';
+      return 'Hold still while the tracker settles on the current pose.';
     }
 
     final elapsedMs = _alignmentHeldSince == null

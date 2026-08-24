@@ -19,7 +19,6 @@ class PoseRecord {
     required this.captureOrientation,
     required this.imageWidth,
     required this.imageHeight,
-    this.baselinePose = false,
   });
 
   final int? id;
@@ -34,10 +33,8 @@ class PoseRecord {
   final CaptureOrientation captureOrientation;
   final int imageWidth;
   final int imageHeight;
-  final bool baselinePose;
 
   bool get hasSourceDimensions => imageWidth > 0 && imageHeight > 0;
-  bool get isReference => baselinePose;
 
   int get displayQuarterTurns => captureOrientation.quarterTurnsForDisplay(
     rawWidth: imageWidth,
@@ -70,7 +67,6 @@ class PoseRecord {
     CaptureOrientation? captureOrientation,
     int? imageWidth,
     int? imageHeight,
-    bool? baselinePose,
   }) {
     return PoseRecord(
       id: id ?? this.id,
@@ -85,7 +81,6 @@ class PoseRecord {
       captureOrientation: captureOrientation ?? this.captureOrientation,
       imageWidth: imageWidth ?? this.imageWidth,
       imageHeight: imageHeight ?? this.imageHeight,
-      baselinePose: baselinePose ?? this.baselinePose,
     );
   }
 
@@ -179,11 +174,6 @@ class PoseRecord {
       ),
       imageWidth: map['image_width'] as int? ?? 0,
       imageHeight: map['image_height'] as int? ?? 0,
-      baselinePose:
-          ((map['baseline_pose'] as int?) ??
-              (map['is_reference'] as int?) ??
-              0) ==
-          1,
     );
   }
 
@@ -203,8 +193,6 @@ class PoseRecord {
       'capture_orientation': captureOrientation.storageValue,
       'image_width': imageWidth,
       'image_height': imageHeight,
-      'baseline_pose': baselinePose ? 1 : 0,
-      'is_reference': baselinePose ? 1 : 0,
     };
   }
 

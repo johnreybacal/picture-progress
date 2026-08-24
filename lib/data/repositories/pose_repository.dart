@@ -1,9 +1,7 @@
-import 'dart:convert';
-
 import 'package:sqflite/sqflite.dart';
 
-import '../models/baseline_pose_metadata.dart';
 import '../models/capture_orientation.dart';
+import '../models/capture_viewport_ratio.dart';
 import '../models/lens_facing.dart';
 import '../models/pose_bounding_box.dart';
 import '../models/pose_landmark_point.dart';
@@ -35,8 +33,9 @@ class PoseRepository {
       name: name,
       createdAt: DateTime.now(),
       thumbnailPath: '',
-      baselineMetadata: null,
       preferredLens: null,
+      lastUsedZoomLevel: null,
+      lastUsedAspectRatio: CaptureViewportRatio.full,
     );
 
     final id = await db.insert(
@@ -99,21 +98,35 @@ class PoseRepository {
     return result.map(PoseRecord.fromDatabaseMap).toList();
   }
 
-  Future<PoseRecord?> fetchBaselineRecord(int seriesId) async {
-    final db = await databaseService.database;
-    final result = await db.query(
-      'pose_records',
-      where: 'series_id = ? AND (baseline_pose = 1 OR is_reference = 1)',
-      whereArgs: [seriesId],
-      orderBy: 'timestamp ASC',
-      limit: 1,
-    );
-
-    if (result.isEmpty) {
-      return null;
+  Future<void> updateSeriesCapturePreferences(
+    int seriesId, {
+    LensFacing? preferredLens,
+    double? lastUsedZoomLevel,
+    CaptureViewportRatio? lastUsedAspectRatio,
+  }) async {
+    final updates = <String, Object?>{};
+    if (preferredLens != null) {
+      updates['preferred_lens'] = preferredLens.storageValue;
+    }
+    if (lastUsedZoomLevel != null) {
+      updates['last_used_zoom_level'] = lastUsedZoomLevel > 0
+          ? lastUsedZoomLevel
+          : 0;
+    }
+    if (lastUsedAspectRatio != null) {
+      updates['last_used_aspect_ratio'] = lastUsedAspectRatio.storageValue;
+    }
+    if (updates.isEmpty) {
+      return;
     }
 
-    return PoseRecord.fromDatabaseMap(result.first);
+    final db = await databaseService.database;
+    await db.update(
+      'pose_series',
+      updates,
+      where: 'id = ?',
+      whereArgs: [seriesId],
+    );
   }
 
   Future<PoseRecord> addRecord({
@@ -128,17 +141,10 @@ class PoseRepository {
     required CaptureOrientation captureOrientation,
     required int imageWidth,
     required int imageHeight,
-    bool baselinePose = false,
+    double? captureZoomLevel,
+    CaptureViewportRatio? captureViewportRatio,
   }) async {
     final db = await databaseService.database;
-    if (baselinePose) {
-      await db.update(
-        'pose_records',
-        {'baseline_pose': 0, 'is_reference': 0},
-        where: 'series_id = ? AND (baseline_pose = 1 OR is_reference = 1)',
-        whereArgs: [seriesId],
-      );
-    }
 
     final record = PoseRecord(
       seriesId: seriesId,
@@ -152,7 +158,6 @@ class PoseRepository {
       captureOrientation: captureOrientation,
       imageWidth: imageWidth,
       imageHeight: imageHeight,
-      baselinePose: baselinePose,
     );
 
     final id = await db.insert(
@@ -163,29 +168,26 @@ class PoseRepository {
 
     final savedRecord = record.copyWith(id: id);
     final existingSeries = await getSeries(seriesId);
-    if (existingSeries != null &&
-        (existingSeries.thumbnailPath.isEmpty || baselinePose)) {
-      await db.update(
-        'pose_series',
-        {'thumbnail_path': imagePath},
-        where: 'id = ?',
-        whereArgs: [seriesId],
-      );
-    }
-
-    if (existingSeries != null &&
-        (baselinePose || existingSeries.preferredLens == null)) {
+    if (existingSeries != null) {
       final preferredLens = LensFacing.fromCameraLensName(record.cameraLens);
+      final updates = <String, Object?>{
+        'thumbnail_path': imagePath,
+        'preferred_lens': preferredLens.storageValue,
+      };
+      if (captureZoomLevel != null) {
+        updates['last_used_zoom_level'] = captureZoomLevel > 0
+            ? captureZoomLevel
+            : 0;
+      }
+      if (captureViewportRatio != null) {
+        updates['last_used_aspect_ratio'] = captureViewportRatio.storageValue;
+      }
       await db.update(
         'pose_series',
-        {'preferred_lens': preferredLens.storageValue},
+        updates,
         where: 'id = ?',
         whereArgs: [seriesId],
       );
-    }
-
-    if (baselinePose) {
-      await _updateBaselineMetadata(db, seriesId, savedRecord);
     }
 
     return savedRecord;
@@ -212,33 +214,10 @@ class PoseRepository {
     await fileStorageService.deleteStoredFile(record.imagePath);
     await db.delete('pose_records', where: 'id = ?', whereArgs: [record.id]);
     await _rebuildThumbnail(db, record.seriesId);
-    await _rebuildBaselineMetadata(db, record.seriesId);
   }
 
   Future<String> resolveImagePath(String storedPath) {
     return fileStorageService.resolveAbsolutePath(storedPath);
-  }
-
-  Future<void> _updateBaselineMetadata(
-    Database db,
-    int seriesId,
-    PoseRecord record,
-  ) async {
-    final metadata = BaselinePoseMetadata(
-      recordId: record.id!,
-      imagePath: record.imagePath,
-      capturedAt: record.timestamp,
-      anchorCenter: record.anchorCenter,
-      boundingBox: record.boundingBox,
-      cameraLens: record.cameraLens,
-      captureOrientation: record.captureOrientation,
-    );
-    await db.update(
-      'pose_series',
-      {'baseline_metadata_json': jsonEncode(metadata.toJson())},
-      where: 'id = ?',
-      whereArgs: [seriesId],
-    );
   }
 
   Future<void> _rebuildThumbnail(Database db, int seriesId) async {
@@ -246,7 +225,7 @@ class PoseRepository {
       'pose_records',
       where: 'series_id = ?',
       whereArgs: [seriesId],
-      orderBy: 'baseline_pose DESC, is_reference DESC, timestamp DESC',
+      orderBy: 'timestamp DESC',
       limit: 1,
     );
     final thumbnailPath = result.isEmpty
@@ -257,31 +236,6 @@ class PoseRepository {
       {'thumbnail_path': thumbnailPath},
       where: 'id = ?',
       whereArgs: [seriesId],
-    );
-  }
-
-  Future<void> _rebuildBaselineMetadata(Database db, int seriesId) async {
-    final result = await db.query(
-      'pose_records',
-      where: 'series_id = ? AND (baseline_pose = 1 OR is_reference = 1)',
-      whereArgs: [seriesId],
-      limit: 1,
-      orderBy: 'timestamp DESC',
-    );
-    if (result.isEmpty) {
-      await db.update(
-        'pose_series',
-        {'baseline_metadata_json': ''},
-        where: 'id = ?',
-        whereArgs: [seriesId],
-      );
-      return;
-    }
-
-    await _updateBaselineMetadata(
-      db,
-      seriesId,
-      PoseRecord.fromDatabaseMap(result.first),
     );
   }
 }

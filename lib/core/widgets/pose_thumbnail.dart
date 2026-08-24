@@ -15,12 +15,14 @@ class PoseThumbnail extends ConsumerWidget {
     this.borderRadius = const BorderRadius.all(Radius.circular(18)),
     this.fit = BoxFit.cover,
     this.showSkeletonOverlay = true,
+    this.skeletonOverlayOpacity = 0.34,
   });
 
   final PoseRecord record;
   final BorderRadius borderRadius;
   final BoxFit fit;
   final bool showSkeletonOverlay;
+  final double skeletonOverlayOpacity;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -58,6 +60,7 @@ class PoseThumbnail extends ConsumerWidget {
                     painter: StoredPoseSkeletonPainter(
                       landmarks: record.landmarks,
                       fit: BoxFit.fill,
+                      opacity: skeletonOverlayOpacity,
                       imageSize: Size(
                         data.imageWidth.toDouble(),
                         data.imageHeight.toDouble(),

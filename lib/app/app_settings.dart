@@ -6,8 +6,8 @@ class AppSettings {
     this.alignmentThreshold = AppConstants.defaultAutoCaptureThreshold,
     this.stabilitySensitivity = AppConstants.defaultStabilitySensitivity,
     this.autoCaptureDelay = AppConstants.defaultAutoCaptureDelay,
-    this.showBaselineOverlay = true,
-    this.baselineOverlayOpacity = AppConstants.defaultBaselineOverlayOpacity,
+    this.showReferenceOverlay = true,
+    this.referenceOverlayOpacity = AppConstants.defaultReferenceOverlayOpacity,
     this.photoStorageDirectoryPath = '',
     this.exportDirectoryPath = '',
   });
@@ -16,8 +16,8 @@ class AppSettings {
   final double alignmentThreshold;
   final double stabilitySensitivity;
   final Duration autoCaptureDelay;
-  final bool showBaselineOverlay;
-  final double baselineOverlayOpacity;
+  final bool showReferenceOverlay;
+  final double referenceOverlayOpacity;
   final String photoStorageDirectoryPath;
   final String exportDirectoryPath;
 
@@ -26,8 +26,8 @@ class AppSettings {
     double? alignmentThreshold,
     double? stabilitySensitivity,
     Duration? autoCaptureDelay,
-    bool? showBaselineOverlay,
-    double? baselineOverlayOpacity,
+    bool? showReferenceOverlay,
+    double? referenceOverlayOpacity,
     String? photoStorageDirectoryPath,
     String? exportDirectoryPath,
   }) {
@@ -36,9 +36,9 @@ class AppSettings {
       alignmentThreshold: alignmentThreshold ?? this.alignmentThreshold,
       stabilitySensitivity: stabilitySensitivity ?? this.stabilitySensitivity,
       autoCaptureDelay: autoCaptureDelay ?? this.autoCaptureDelay,
-      showBaselineOverlay: showBaselineOverlay ?? this.showBaselineOverlay,
-      baselineOverlayOpacity:
-          baselineOverlayOpacity ?? this.baselineOverlayOpacity,
+      showReferenceOverlay: showReferenceOverlay ?? this.showReferenceOverlay,
+      referenceOverlayOpacity:
+          referenceOverlayOpacity ?? this.referenceOverlayOpacity,
       photoStorageDirectoryPath:
           photoStorageDirectoryPath ?? this.photoStorageDirectoryPath,
       exportDirectoryPath: exportDirectoryPath ?? this.exportDirectoryPath,

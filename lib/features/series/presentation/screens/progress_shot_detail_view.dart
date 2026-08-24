@@ -122,8 +122,6 @@ class _ProgressShotDetailViewState
                             '${widget.record.landmarks.length} alignment markers',
                           ),
                         ),
-                        if (widget.record.isReference)
-                          const Chip(label: Text('Baseline photo')),
                       ],
                     ),
                   ],
@@ -212,7 +210,6 @@ class _ProgressShotDetailViewState
             ),
           );
       ref.invalidate(seriesRecordsProvider(widget.series.id!));
-      ref.invalidate(seriesBaselineProvider(widget.series.id!));
       await ref.read(seriesListControllerProvider.notifier).refresh();
       if (!mounted) {
         return;
@@ -264,7 +261,6 @@ class _ProgressShotDetailViewState
     try {
       await ref.read(poseRepositoryProvider).deleteRecord(widget.record);
       ref.invalidate(seriesRecordsProvider(widget.series.id!));
-      ref.invalidate(seriesBaselineProvider(widget.series.id!));
       await ref.read(seriesListControllerProvider.notifier).refresh();
       if (!mounted) {
         return;

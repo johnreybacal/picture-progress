@@ -2,14 +2,11 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:camera/camera.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
-import '../models/capture_orientation.dart';
 import '../models/pose_series.dart';
 import 'permission_service.dart';
 
@@ -29,11 +26,11 @@ class FileStorageService {
     await defaultExportRootPath();
   }
 
-  Future<String> persistCameraCapture(
-    XFile sourceFile, {
+  Future<String> persistCaptureBytes(
+    Uint8List jpegBytes, {
     required int seriesId,
-    required CaptureOrientation captureOrientation,
     String? preferredRootPath,
+    String extension = '.jpg',
   }) async {
     await permissionService.ensureStorageAccess();
     final seriesDirectory = Directory(
@@ -44,17 +41,11 @@ class FileStorageService {
     );
     await seriesDirectory.create(recursive: true);
 
-    final extension = '.jpg';
     final filename =
         '${DateTime.now().millisecondsSinceEpoch}_${_uuid.v4().replaceAll('-', '')}$extension';
     final destination = File(path.join(seriesDirectory.path, filename));
 
-    final sourceBytes = await File(sourceFile.path).readAsBytes();
-    final uprightBytes = _buildUprightCaptureBytes(
-      sourceBytes,
-      captureOrientation,
-    );
-    await destination.writeAsBytes(uprightBytes, flush: true);
+    await destination.writeAsBytes(jpegBytes, flush: true);
 
     return destination.path;
   }
@@ -245,29 +236,6 @@ class FileStorageService {
     if (await directory.exists()) {
       await directory.delete(recursive: true);
     }
-  }
-
-  Uint8List _buildUprightCaptureBytes(
-    Uint8List sourceBytes,
-    CaptureOrientation captureOrientation,
-  ) {
-    final decoded = img.decodeImage(sourceBytes);
-    if (decoded == null) {
-      return sourceBytes;
-    }
-
-    var normalized = img.bakeOrientation(decoded);
-    if (captureOrientation.isLandscape &&
-        normalized.width > normalized.height) {
-      normalized = img.copyRotate(
-        normalized,
-        angle: captureOrientation == CaptureOrientation.landscapeLeft
-            ? 90
-            : 270,
-      );
-    }
-
-    return Uint8List.fromList(img.encodeJpg(normalized, quality: 94));
   }
 
   Future<Directory> _resolveDefaultRootDirectory() async {
