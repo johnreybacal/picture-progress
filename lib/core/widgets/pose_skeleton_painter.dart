@@ -1,6 +1,5 @@
 import 'dart:math';
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
@@ -14,7 +13,6 @@ class SkeletonPainter extends CustomPainter {
     required this.landmarks,
     required this.imageSize,
     required this.rotation,
-    required this.cameraLensDirection,
     this.pointColor = const Color(0xFF5EEAD4),
     this.lineColor = const Color(0xFF34D399),
   });
@@ -22,7 +20,6 @@ class SkeletonPainter extends CustomPainter {
   final List<PoseLandmarkPoint> landmarks;
   final Size imageSize;
   final InputImageRotation rotation;
-  final CameraLensDirection cameraLensDirection;
   final Color pointColor;
   final Color lineColor;
 
@@ -35,7 +32,6 @@ class SkeletonPainter extends CustomPainter {
     final transformer = PosePreviewCoordinateTransformer(
       imageSize: imageSize,
       rotation: rotation,
-      cameraLensDirection: cameraLensDirection,
     );
 
     final projectedLandmarks = <String, _ProjectedLandmark>{};
@@ -105,7 +101,6 @@ class SkeletonPainter extends CustomPainter {
     return oldDelegate.landmarks != landmarks ||
         oldDelegate.imageSize != imageSize ||
         oldDelegate.rotation != rotation ||
-        oldDelegate.cameraLensDirection != cameraLensDirection ||
         oldDelegate.pointColor != pointColor ||
         oldDelegate.lineColor != lineColor;
   }

@@ -21,15 +21,9 @@ class CameraPreviewViewport extends StatelessWidget {
     return Center(
       child: AspectRatio(
         aspectRatio: viewportRatio.aspectRatio!,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(28),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.white24),
-              borderRadius: BorderRadius.circular(28),
-            ),
-            child: child,
-          ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(border: Border.all(color: Colors.white10)),
+          child: ClipRect(child: child),
         ),
       ),
     );

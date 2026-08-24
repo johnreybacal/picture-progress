@@ -1,6 +1,5 @@
 import 'dart:math';
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
@@ -17,7 +16,6 @@ class ReferenceGuidePainter extends CustomPainter {
     required this.liveLandmarks,
     required this.liveImageSize,
     required this.liveRotation,
-    required this.cameraLensDirection,
     required this.opacity,
     required this.mirrorHorizontally,
     this.pointColor = const Color(0xFFFDE68A),
@@ -28,7 +26,6 @@ class ReferenceGuidePainter extends CustomPainter {
   final List<PoseLandmarkPoint> liveLandmarks;
   final Size liveImageSize;
   final InputImageRotation liveRotation;
-  final CameraLensDirection cameraLensDirection;
   final double opacity;
   final bool mirrorHorizontally;
   final Color pointColor;
@@ -108,7 +105,6 @@ class ReferenceGuidePainter extends CustomPainter {
         oldDelegate.liveLandmarks != liveLandmarks ||
         oldDelegate.liveImageSize != liveImageSize ||
         oldDelegate.liveRotation != liveRotation ||
-        oldDelegate.cameraLensDirection != cameraLensDirection ||
         oldDelegate.opacity != opacity ||
         oldDelegate.mirrorHorizontally != mirrorHorizontally ||
         oldDelegate.pointColor != pointColor ||
@@ -129,7 +125,6 @@ class ReferenceGuidePainter extends CustomPainter {
     final transformer = PosePreviewCoordinateTransformer(
       imageSize: liveImageSize,
       rotation: liveRotation,
-      cameraLensDirection: cameraLensDirection,
     );
 
     final projectedByType = <String, Offset>{};

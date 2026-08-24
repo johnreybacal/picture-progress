@@ -47,9 +47,9 @@ class _CameraViewState extends ConsumerState<CameraView> {
   late final DynamicAlignmentService _dynamicAlignmentService;
   late final RotationUtility _rotationUtility;
 
-  List<CameraDescription> _availableCameras = const [];
   CameraController? _cameraController;
-  int _selectedCameraIndex = 0;
+  CameraDescription? _frontCamera;
+  _RearCameraSystem? _rearCameraSystem;
 
   List<PoseLandmarkPoint> _latestLandmarks = const [];
   InputImageRotation _latestFrameRotation = InputImageRotation.rotation0deg;
@@ -66,10 +66,15 @@ class _CameraViewState extends ConsumerState<CameraView> {
   double _minZoomLevel = AppConstants.defaultZoomLevel;
   double _maxZoomLevel = AppConstants.defaultZoomLevel;
   double _zoomLevel = AppConstants.defaultZoomLevel;
-  double _baseZoomLevel = AppConstants.defaultZoomLevel;
+  double _controllerZoomLevel = AppConstants.defaultZoomLevel;
+  double _baseControllerZoomLevel = AppConstants.defaultZoomLevel;
+  double _currentLensBaseZoom = AppConstants.defaultZoomLevel;
+  double _lastFrontLogicalZoomLevel = AppConstants.defaultZoomLevel;
+  double _lastBackLogicalZoomLevel = AppConstants.defaultZoomLevel;
   double? _seriesZoomPreference;
   LensFacing? _seriesLensPreference;
   late CaptureViewportRatio _viewportRatio;
+  _ZoomPreset _selectedBackPreset = _ZoomPreset.wide;
   Timer? _seriesPreferencesSaveTimer;
 
   bool get _canAutoCapture {
@@ -77,15 +82,13 @@ class _CameraViewState extends ConsumerState<CameraView> {
         widget.referenceRecord!.landmarks.isNotEmpty;
   }
 
-  bool get _supportsUltraWide => _minZoomLevel <= 0.65;
+  bool get _isFrontCameraActive {
+    return _cameraController?.description.lensDirection ==
+        CameraLensDirection.front;
+  }
 
-  double get _minimumSelectableZoom {
-    if (_supportsUltraWide) {
-      return _minZoomLevel;
-    }
-    return _minZoomLevel > AppConstants.defaultZoomLevel
-        ? _minZoomLevel
-        : AppConstants.defaultZoomLevel;
+  bool get _hasCameraDirections {
+    return _frontCamera != null && _rearCameraSystem != null;
   }
 
   @override
@@ -101,6 +104,16 @@ class _CameraViewState extends ConsumerState<CameraView> {
     _seriesZoomPreference = widget.series.lastUsedZoomLevel;
     _seriesLensPreference = widget.series.preferredLens;
     _viewportRatio = widget.series.lastUsedAspectRatio;
+
+    final initialLogicalZoom =
+        _seriesZoomPreference ?? AppConstants.defaultZoomLevel;
+    if (_seriesLensPreference == LensFacing.front) {
+      _lastFrontLogicalZoomLevel = initialLogicalZoom;
+    } else {
+      _lastBackLogicalZoomLevel = initialLogicalZoom;
+    }
+    _selectedBackPreset = _presetForLogicalZoom(initialLogicalZoom);
+
     _streamPoseDetector = PoseDetector(
       options: PoseDetectorOptions(
         model: PoseDetectionModel.base,
@@ -127,18 +140,42 @@ class _CameraViewState extends ConsumerState<CameraView> {
         throw StateError('No camera is available on this device.');
       }
 
+      _frontCamera = _selectFrontCamera(cameras);
+      _rearCameraSystem = _buildRearCameraSystem(cameras);
+
       final preferredLensDirection =
           _seriesLensPreference?.cameraLensDirection ??
           (widget.referenceRecord?.cameraLens == CameraLensDirection.back.name
               ? CameraLensDirection.back
               : CameraLensDirection.front);
-      final preferredIndex = cameras.indexWhere(
-        (camera) => camera.lensDirection == preferredLensDirection,
-      );
-      _availableCameras = cameras;
-      _selectedCameraIndex = preferredIndex >= 0 ? preferredIndex : 0;
 
-      await _startCamera(_availableCameras[_selectedCameraIndex]);
+      if (preferredLensDirection == CameraLensDirection.front &&
+          _frontCamera != null) {
+        await _startFrontCamera(
+          preferredLogicalZoom: _seriesLensPreference == LensFacing.front
+              ? (_seriesZoomPreference ?? _lastFrontLogicalZoomLevel)
+              : _lastFrontLogicalZoomLevel,
+        );
+        return;
+      }
+
+      if (_rearCameraSystem != null) {
+        await _startBackCameraForLogicalZoom(
+          _seriesLensPreference == LensFacing.back
+              ? (_seriesZoomPreference ?? _lastBackLogicalZoomLevel)
+              : _lastBackLogicalZoomLevel,
+        );
+        return;
+      }
+
+      if (_frontCamera != null) {
+        await _startFrontCamera(
+          preferredLogicalZoom: _lastFrontLogicalZoomLevel,
+        );
+        return;
+      }
+
+      throw StateError('No supported front or rear camera is available.');
     } catch (error) {
       if (!mounted) {
         return;
@@ -150,7 +187,169 @@ class _CameraViewState extends ConsumerState<CameraView> {
     }
   }
 
-  Future<void> _startCamera(CameraDescription description) async {
+  CameraDescription? _selectFrontCamera(List<CameraDescription> cameras) {
+    final frontCameras = cameras
+        .where((camera) => camera.lensDirection == CameraLensDirection.front)
+        .toList(growable: false);
+    if (frontCameras.isEmpty) {
+      return null;
+    }
+
+    return _firstCameraWithLensType(frontCameras, CameraLensType.wide) ??
+        frontCameras.first;
+  }
+
+  _RearCameraSystem? _buildRearCameraSystem(List<CameraDescription> cameras) {
+    final rearCameras = cameras
+        .where((camera) => camera.lensDirection != CameraLensDirection.front)
+        .toList(growable: false);
+    if (rearCameras.isEmpty) {
+      return null;
+    }
+
+    final ultraWide =
+        _firstCameraWithLensType(rearCameras, CameraLensType.ultraWide) ??
+        _firstCameraMatchingName(rearCameras, const ['ultra', '0.6']);
+    final telephoto =
+        _firstCameraWithLensType(rearCameras, CameraLensType.telephoto) ??
+        _firstCameraMatchingName(rearCameras, const ['tele', '2x', 'zoom']);
+    final wide =
+        _firstCameraWithLensType(rearCameras, CameraLensType.wide) ??
+        rearCameras.firstWhere(
+          (camera) => camera != ultraWide && camera != telephoto,
+          orElse: () => rearCameras.first,
+        );
+
+    return _RearCameraSystem(
+      wide: wide,
+      ultraWide: ultraWide == wide ? null : ultraWide,
+      telephoto: telephoto == wide ? null : telephoto,
+    );
+  }
+
+  CameraDescription? _firstCameraWithLensType(
+    List<CameraDescription> cameras,
+    CameraLensType lensType,
+  ) {
+    for (final camera in cameras) {
+      if (camera.lensType == lensType) {
+        return camera;
+      }
+    }
+    return null;
+  }
+
+  CameraDescription? _firstCameraMatchingName(
+    List<CameraDescription> cameras,
+    List<String> keywords,
+  ) {
+    for (final camera in cameras) {
+      final lowerName = camera.name.toLowerCase();
+      if (keywords.any(lowerName.contains)) {
+        return camera;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _startFrontCamera({
+    double preferredLogicalZoom = AppConstants.defaultZoomLevel,
+  }) async {
+    final camera = _frontCamera ?? _rearCameraSystem?.wide;
+    if (camera == null) {
+      throw StateError('No front camera is available on this device.');
+    }
+
+    await _startCamera(
+      camera,
+      desiredControllerZoom: preferredLogicalZoom,
+      lensBaseZoom: AppConstants.defaultZoomLevel,
+    );
+  }
+
+  Future<void> _startBackCameraForLogicalZoom(double logicalZoom) async {
+    final rearCameraSystem = _rearCameraSystem;
+    if (rearCameraSystem == null) {
+      if (_frontCamera != null) {
+        await _startFrontCamera(
+          preferredLogicalZoom: _lastFrontLogicalZoomLevel,
+        );
+      }
+      return;
+    }
+
+    final plan = _resolveBackCameraLaunchPlan(logicalZoom, rearCameraSystem);
+    _selectedBackPreset = plan.preset;
+    await _startCamera(
+      plan.camera,
+      desiredControllerZoom: plan.desiredControllerZoom,
+      lensBaseZoom: plan.lensBaseZoom,
+    );
+  }
+
+  _BackCameraLaunchPlan _resolveBackCameraLaunchPlan(
+    double logicalZoom,
+    _RearCameraSystem rearCameraSystem,
+  ) {
+    final preset = _presetForLogicalZoom(logicalZoom);
+    switch (preset) {
+      case _ZoomPreset.ultraWide:
+        if (rearCameraSystem.ultraWide != null) {
+          return _BackCameraLaunchPlan(
+            camera: rearCameraSystem.ultraWide!,
+            preset: _ZoomPreset.ultraWide,
+            lensBaseZoom: _ZoomPreset.ultraWide.logicalZoom,
+            desiredControllerZoom:
+                logicalZoom / _ZoomPreset.ultraWide.logicalZoom,
+          );
+        }
+        return _BackCameraLaunchPlan(
+          camera: rearCameraSystem.wide,
+          preset: _ZoomPreset.ultraWide,
+          lensBaseZoom: AppConstants.defaultZoomLevel,
+          desiredControllerZoom: logicalZoom,
+        );
+      case _ZoomPreset.telephoto:
+        if (rearCameraSystem.telephoto != null) {
+          return _BackCameraLaunchPlan(
+            camera: rearCameraSystem.telephoto!,
+            preset: _ZoomPreset.telephoto,
+            lensBaseZoom: _ZoomPreset.telephoto.logicalZoom,
+            desiredControllerZoom:
+                logicalZoom / _ZoomPreset.telephoto.logicalZoom,
+          );
+        }
+        return _BackCameraLaunchPlan(
+          camera: rearCameraSystem.wide,
+          preset: _ZoomPreset.telephoto,
+          lensBaseZoom: AppConstants.defaultZoomLevel,
+          desiredControllerZoom: logicalZoom,
+        );
+      case _ZoomPreset.wide:
+        return _BackCameraLaunchPlan(
+          camera: rearCameraSystem.wide,
+          preset: _ZoomPreset.wide,
+          lensBaseZoom: AppConstants.defaultZoomLevel,
+          desiredControllerZoom: logicalZoom,
+        );
+    }
+  }
+
+  _ZoomPreset _presetForLogicalZoom(double logicalZoom) {
+    if (logicalZoom <= 0.8) {
+      return _ZoomPreset.ultraWide;
+    }
+    if (logicalZoom >= 1.6) {
+      return _ZoomPreset.telephoto;
+    }
+    return _ZoomPreset.wide;
+  }
+
+  Future<void> _startCamera(
+    CameraDescription description, {
+    required double desiredControllerZoom,
+    required double lensBaseZoom,
+  }) async {
     final previousController = _cameraController;
     if (previousController != null) {
       if (previousController.value.isStreamingImages) {
@@ -179,17 +378,11 @@ class _CameraViewState extends ConsumerState<CameraView> {
 
     final minZoom = await controller.getMinZoomLevel();
     final maxZoom = await controller.getMaxZoomLevel();
-    final minimumSelectableZoom = minZoom <= 0.65
-        ? minZoom
-        : (minZoom > AppConstants.defaultZoomLevel
-              ? minZoom
-              : AppConstants.defaultZoomLevel);
-    final desiredZoom = previousController == null
-        ? (_seriesZoomPreference ?? AppConstants.defaultZoomLevel)
-        : (_seriesZoomPreference ?? _zoomLevel);
-    final zoom = desiredZoom.clamp(minimumSelectableZoom, maxZoom).toDouble();
+    final controllerZoom = desiredControllerZoom
+        .clamp(minZoom, maxZoom)
+        .toDouble();
 
-    await controller.setZoomLevel(zoom);
+    await controller.setZoomLevel(controllerZoom);
     await controller.startImageStream(_processCameraFrame);
 
     if (!mounted) {
@@ -197,17 +390,26 @@ class _CameraViewState extends ConsumerState<CameraView> {
       return;
     }
 
+    final logicalZoom = controllerZoom * lensBaseZoom;
     _landmarkSmoother.reset();
     _accuracyDebouncer.reset();
-    _seriesZoomPreference = zoom;
+    _seriesZoomPreference = logicalZoom;
     _seriesLensPreference = LensFacing.fromCameraLensDirection(
       description.lensDirection,
     );
+    if (description.lensDirection == CameraLensDirection.front) {
+      _lastFrontLogicalZoomLevel = logicalZoom;
+    } else {
+      _lastBackLogicalZoomLevel = logicalZoom;
+    }
+
     setState(() {
       _cameraController = controller;
       _minZoomLevel = minZoom;
       _maxZoomLevel = maxZoom;
-      _zoomLevel = zoom;
+      _controllerZoomLevel = controllerZoom;
+      _currentLensBaseZoom = lensBaseZoom;
+      _zoomLevel = logicalZoom;
       _alignmentHeldSince = null;
       _latestLandmarks = const [];
       _poseMotion = 1.0;
@@ -218,16 +420,16 @@ class _CameraViewState extends ConsumerState<CameraView> {
   }
 
   Future<void> _switchCamera() async {
-    if (_availableCameras.length < 2 || _capturing) {
+    if (_capturing || !_hasCameraDirections) {
       return;
     }
 
-    final nextIndex = (_selectedCameraIndex + 1) % _availableCameras.length;
-    _selectedCameraIndex = nextIndex;
-    _seriesLensPreference = LensFacing.fromCameraLensDirection(
-      _availableCameras[_selectedCameraIndex].lensDirection,
-    );
-    await _startCamera(_availableCameras[_selectedCameraIndex]);
+    if (_isFrontCameraActive) {
+      await _startBackCameraForLogicalZoom(_lastBackLogicalZoomLevel);
+      return;
+    }
+
+    await _startFrontCamera(preferredLogicalZoom: _lastFrontLogicalZoomLevel);
   }
 
   Future<void> _processCameraFrame(CameraImage image) async {
@@ -368,6 +570,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
       try {
         await File(xFile.path).delete();
       } catch (_) {}
+
       final absolutePath = await fileStorage.resolveAbsolutePath(relativePath);
       final dimensions = await fileStorage.readImageDimensions(absolutePath);
       final detectedLandmarks = await _detectLandmarksInSavedImage(
@@ -395,6 +598,8 @@ class _CameraViewState extends ConsumerState<CameraView> {
         imageHeight: dimensions.height,
         captureZoomLevel: _zoomLevel,
         captureViewportRatio: _viewportRatio,
+        mirrorLandmarksHorizontally:
+            controller.description.lensDirection == CameraLensDirection.front,
       );
 
       ref.invalidate(seriesRecordsProvider(widget.series.id!));
@@ -504,24 +709,162 @@ class _CameraViewState extends ConsumerState<CameraView> {
     );
   }
 
-  Future<void> _setZoomLevel(double zoom) async {
+  Future<void> _setControllerZoomLevel(double zoom) async {
     final controller = _cameraController;
     if (controller == null || !controller.value.isInitialized) {
       return;
     }
 
-    final clampedZoom = zoom
-        .clamp(_minimumSelectableZoom, _maxZoomLevel)
-        .toDouble();
+    final clampedZoom = zoom.clamp(_minZoomLevel, _maxZoomLevel).toDouble();
     await controller.setZoomLevel(clampedZoom);
     if (!mounted) {
       return;
     }
-    _seriesZoomPreference = clampedZoom;
+
+    final logicalZoom = clampedZoom * _currentLensBaseZoom;
+    _seriesZoomPreference = logicalZoom;
+    if (_isFrontCameraActive) {
+      _lastFrontLogicalZoomLevel = logicalZoom;
+    } else {
+      _lastBackLogicalZoomLevel = logicalZoom;
+    }
+
     setState(() {
-      _zoomLevel = clampedZoom;
+      _controllerZoomLevel = clampedZoom;
+      _zoomLevel = logicalZoom;
     });
     _scheduleSeriesPreferencesSave();
+  }
+
+  Future<void> _selectZoomPreset(_ZoomPreset preset) async {
+    if (_capturing) {
+      return;
+    }
+
+    if (_isFrontCameraActive) {
+      if (preset != _ZoomPreset.wide) {
+        return;
+      }
+      await _setControllerZoomLevel(AppConstants.defaultZoomLevel);
+      return;
+    }
+
+    final rearCameraSystem = _rearCameraSystem;
+    final controller = _cameraController;
+    if (rearCameraSystem == null || controller == null) {
+      return;
+    }
+
+    _selectedBackPreset = preset;
+    switch (preset) {
+      case _ZoomPreset.ultraWide:
+        if (rearCameraSystem.ultraWide != null) {
+          if (controller.description == rearCameraSystem.ultraWide &&
+              (_currentLensBaseZoom - _ZoomPreset.ultraWide.logicalZoom).abs() <
+                  0.001) {
+            await _setControllerZoomLevel(AppConstants.defaultZoomLevel);
+            return;
+          }
+          await _startCamera(
+            rearCameraSystem.ultraWide!,
+            desiredControllerZoom: AppConstants.defaultZoomLevel,
+            lensBaseZoom: _ZoomPreset.ultraWide.logicalZoom,
+          );
+          return;
+        }
+        if (!_canUseDigitalUltraWide) {
+          return;
+        }
+        if (controller.description != rearCameraSystem.wide ||
+            (_currentLensBaseZoom - AppConstants.defaultZoomLevel).abs() >
+                0.001) {
+          await _startCamera(
+            rearCameraSystem.wide,
+            desiredControllerZoom: _ZoomPreset.ultraWide.logicalZoom,
+            lensBaseZoom: AppConstants.defaultZoomLevel,
+          );
+          return;
+        }
+        await _setControllerZoomLevel(_ZoomPreset.ultraWide.logicalZoom);
+        return;
+      case _ZoomPreset.wide:
+        if (controller.description != rearCameraSystem.wide ||
+            (_currentLensBaseZoom - AppConstants.defaultZoomLevel).abs() >
+                0.001) {
+          await _startCamera(
+            rearCameraSystem.wide,
+            desiredControllerZoom: AppConstants.defaultZoomLevel,
+            lensBaseZoom: AppConstants.defaultZoomLevel,
+          );
+          return;
+        }
+        await _setControllerZoomLevel(AppConstants.defaultZoomLevel);
+        return;
+      case _ZoomPreset.telephoto:
+        if (rearCameraSystem.telephoto != null) {
+          if (controller.description == rearCameraSystem.telephoto &&
+              (_currentLensBaseZoom - _ZoomPreset.telephoto.logicalZoom).abs() <
+                  0.001) {
+            await _setControllerZoomLevel(AppConstants.defaultZoomLevel);
+            return;
+          }
+          await _startCamera(
+            rearCameraSystem.telephoto!,
+            desiredControllerZoom: AppConstants.defaultZoomLevel,
+            lensBaseZoom: _ZoomPreset.telephoto.logicalZoom,
+          );
+          return;
+        }
+        if (!_canUseDigitalTelephoto) {
+          return;
+        }
+        if (controller.description != rearCameraSystem.wide ||
+            (_currentLensBaseZoom - AppConstants.defaultZoomLevel).abs() >
+                0.001) {
+          await _startCamera(
+            rearCameraSystem.wide,
+            desiredControllerZoom: _ZoomPreset.telephoto.logicalZoom,
+            lensBaseZoom: AppConstants.defaultZoomLevel,
+          );
+          return;
+        }
+        await _setControllerZoomLevel(_ZoomPreset.telephoto.logicalZoom);
+        return;
+    }
+  }
+
+  bool get _canUseDigitalUltraWide {
+    return !_isFrontCameraActive &&
+        (_currentLensBaseZoom - AppConstants.defaultZoomLevel).abs() < 0.001 &&
+        _minZoomLevel <= 0.65;
+  }
+
+  bool get _canUseDigitalTelephoto {
+    return !_isFrontCameraActive &&
+        (_currentLensBaseZoom - AppConstants.defaultZoomLevel).abs() < 0.001 &&
+        _maxZoomLevel >= 2.0;
+  }
+
+  bool _isZoomPresetEnabled(_ZoomPreset preset) {
+    if (_isFrontCameraActive) {
+      return preset == _ZoomPreset.wide;
+    }
+
+    switch (preset) {
+      case _ZoomPreset.ultraWide:
+        return _rearCameraSystem?.ultraWide != null || _canUseDigitalUltraWide;
+      case _ZoomPreset.wide:
+        return _rearCameraSystem != null;
+      case _ZoomPreset.telephoto:
+        return _rearCameraSystem?.telephoto != null || _canUseDigitalTelephoto;
+    }
+  }
+
+  bool _isZoomPresetSelected(_ZoomPreset preset) {
+    if (_isFrontCameraActive) {
+      return preset == _ZoomPreset.wide;
+    }
+    return _selectedBackPreset == preset;
   }
 
   void _setViewportRatio(CaptureViewportRatio viewportRatio) {
@@ -533,20 +876,6 @@ class _CameraViewState extends ConsumerState<CameraView> {
       _viewportRatio = viewportRatio;
     });
     _scheduleSeriesPreferencesSave();
-  }
-
-  List<double> _zoomPresets() {
-    final presets = <double>[
-      if (_supportsUltraWide) 0.6,
-      1.0,
-      if (_maxZoomLevel >= 2.0) 2.0,
-    ];
-    return presets
-        .where(
-          (value) =>
-              value >= _minimumSelectableZoom - 0.01 && value <= _maxZoomLevel,
-        )
-        .toList(growable: false);
   }
 
   void _scheduleSeriesPreferencesSave() {
@@ -591,6 +920,7 @@ class _CameraViewState extends ConsumerState<CameraView> {
                   settings.autoCaptureDelay.inMilliseconds)
               .clamp(0.0, 1.0)
               .toDouble();
+    final statusBadge = _statusBadgeData(settings);
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -616,48 +946,33 @@ class _CameraViewState extends ConsumerState<CameraView> {
             )
           : Stack(
               children: [
-                Positioned.fill(child: _buildFullScreenPreview(controller)),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: SafeArea(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                      child: Row(
-                        children: [
-                          _GlassIconButton(
-                            icon: Icons.arrow_back_ios_new_rounded,
-                            onPressed: () => Navigator.of(context).maybePop(),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _InfoPill(
-                              title: widget.series.name,
-                              subtitle: widget.referenceRecord == null
-                                  ? 'Capture the first photo for this timeline. Later shots will line up to it.'
-                                  : _statusMessage(settings),
-                            ),
-                          ),
-                        ],
+                Column(
+                  children: [
+                    SafeArea(
+                      bottom: false,
+                      child: _TopUtilityBar(
+                        statusBadge: statusBadge,
+                        onClose: () => Navigator.of(context).maybePop(),
+                        settingsButton: _AspectRatioMenuButton(
+                          viewportRatio: _viewportRatio,
+                          onSelected: _setViewportRatio,
+                        ),
                       ),
                     ),
-                  ),
-                ),
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: SafeArea(
-                    top: false,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                    Expanded(
+                      child: ColoredBox(
+                        color: Colors.black,
+                        child: _buildPreviewSurface(controller, settings),
+                      ),
+                    ),
+                    SafeArea(
+                      top: false,
                       child: _buildBottomControls(
-                        settings,
-                        autoCaptureProgress,
+                        autoCaptureProgress: autoCaptureProgress,
+                        statusBadge: statusBadge,
                       ),
                     ),
-                  ),
+                  ],
                 ),
                 if (_capturing)
                   Positioned.fill(
@@ -671,8 +986,10 @@ class _CameraViewState extends ConsumerState<CameraView> {
     );
   }
 
-  Widget _buildFullScreenPreview(CameraController controller) {
-    final settings = ref.watch(appSettingsProvider);
+  Widget _buildPreviewSurface(
+    CameraController controller,
+    AppSettings settings,
+  ) {
     final previewSize = controller.value.previewSize ?? const Size(720, 1280);
     final orientedPreviewSize = previewSize.height > previewSize.width
         ? previewSize
@@ -688,13 +1005,15 @@ class _CameraViewState extends ConsumerState<CameraView> {
 
     return GestureDetector(
       onScaleStart: (_) {
-        _baseZoomLevel = _zoomLevel;
+        _baseControllerZoomLevel = _controllerZoomLevel;
       },
       onScaleUpdate: (details) {
         if (details.pointerCount < 2) {
           return;
         }
-        unawaited(_setZoomLevel(_baseZoomLevel * details.scale));
+        unawaited(
+          _setControllerZoomLevel(_baseControllerZoomLevel * details.scale),
+        );
       },
       child: CameraPreviewViewport(
         viewportRatio: _viewportRatio,
@@ -716,8 +1035,6 @@ class _CameraViewState extends ConsumerState<CameraView> {
                           liveLandmarks: _latestLandmarks,
                           liveImageSize: _latestFrameSize,
                           liveRotation: _latestFrameRotation,
-                          cameraLensDirection:
-                              controller.description.lensDirection,
                           opacity: settings.referenceOverlayOpacity,
                           mirrorHorizontally: mirrorReferenceGuide,
                         ),
@@ -729,8 +1046,6 @@ class _CameraViewState extends ConsumerState<CameraView> {
                         landmarks: _latestLandmarks,
                         imageSize: _latestFrameSize,
                         rotation: _latestFrameRotation,
-                        cameraLensDirection:
-                            controller.description.lensDirection,
                       ),
                     ),
                   ),
@@ -743,149 +1058,97 @@ class _CameraViewState extends ConsumerState<CameraView> {
     );
   }
 
-  Widget _buildBottomControls(
-    AppSettings settings,
-    double autoCaptureProgress,
-  ) {
-    final theme = Theme.of(context);
-    final showProgress =
-        _canAutoCapture &&
-        settings.autoCaptureEnabled &&
-        _displayedAlignmentScore >= settings.alignmentThreshold &&
-        _poseMotion <= settings.stabilitySensitivity;
+  Widget _buildBottomControls({
+    required double autoCaptureProgress,
+    required _StatusBadgeData? statusBadge,
+  }) {
+    final shutterColor = statusBadge?.color ?? Colors.white70;
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (widget.referenceRecord != null)
-          _CaptureStatusCard(
-            score: _displayedAlignmentScore,
-            statusText: _statusMessage(settings),
-            progress: autoCaptureProgress,
-            showProgress: showProgress,
-          ),
-        if (widget.referenceRecord != null) const SizedBox(height: 14),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.58),
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-            child: Column(
+    return ColoredBox(
+      color: Colors.black,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: _ZoomPreset.values
+                  .map(
+                    (preset) => Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 5),
+                      child: _ZoomPill(
+                        label: preset.label,
+                        enabled: _isZoomPresetEnabled(preset),
+                        selected: _isZoomPresetSelected(preset),
+                        onTap: () => unawaited(_selectZoomPreset(preset)),
+                      ),
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+            const SizedBox(height: 24),
+            Row(
               children: [
-                Row(
-                  children: [
-                    Text(
-                      'Zoom ${_zoomLevel.toStringAsFixed(1)}x',
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      (_cameraController?.description.lensDirection.name ??
-                              'front')
-                          .toUpperCase(),
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: Colors.white70,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: CaptureViewportRatio.values
-                      .map(
-                        (viewportRatio) => ChoiceChip(
-                          label: Text(viewportRatio.label),
-                          selected: _viewportRatio == viewportRatio,
-                          onSelected: (_) => _setViewportRatio(viewportRatio),
-                        ),
-                      )
-                      .toList(growable: false),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: _zoomPresets()
-                      .map(
-                        (preset) => ChoiceChip(
-                          label: Text('${preset.toStringAsFixed(1)}x'),
-                          selected: (_zoomLevel - preset).abs() < 0.05,
-                          onSelected: (_) => unawaited(_setZoomLevel(preset)),
-                        ),
-                      )
-                      .toList(growable: false),
-                ),
-                SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 3,
-                    thumbShape: const RoundSliderThumbShape(
-                      enabledThumbRadius: 8,
-                    ),
-                    overlayShape: const RoundSliderOverlayShape(
-                      overlayRadius: 16,
+                const SizedBox(width: 52),
+                Expanded(
+                  child: Center(
+                    child: _ShutterButton(
+                      busy: _capturing,
+                      semanticLabel: widget.referenceRecord == null
+                          ? 'Capture first photo'
+                          : 'Capture progress photo',
+                      outlineColor: shutterColor,
+                      onPressed: _capturing ? null : _captureFrame,
                     ),
                   ),
-                  child: Slider(
-                    value: _zoomLevel,
-                    min: _minimumSelectableZoom,
-                    max: _maxZoomLevel,
-                    onChanged: (value) => unawaited(_setZoomLevel(value)),
+                ),
+                SizedBox(
+                  width: 52,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: _UtilityIconButton(
+                      icon: Icons.flip_camera_ios_rounded,
+                      onPressed: _hasCameraDirections ? _switchCamera : null,
+                    ),
                   ),
                 ),
               ],
             ),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            const Expanded(child: SizedBox()),
-            _ShutterButton(
-              busy: _capturing,
-              semanticLabel: widget.referenceRecord == null
-                  ? 'Capture first photo'
-                  : 'Capture progress photo',
-              onPressed: _capturing ? null : _captureFrame,
-            ),
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: _GlassIconButton(
-                  icon: Icons.flip_camera_ios_rounded,
-                  onPressed: _availableCameras.length > 1
-                      ? _switchCamera
-                      : null,
+            if (statusBadge != null && autoCaptureProgress > 0) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                width: 96,
+                child: LinearProgressIndicator(
+                  value: autoCaptureProgress,
+                  minHeight: 3,
+                  borderRadius: BorderRadius.circular(999),
+                  color: statusBadge.color,
+                  backgroundColor: Colors.white12,
                 ),
               ),
-            ),
+            ],
           ],
         ),
-      ],
+      ),
     );
   }
 
-  String _statusMessage(AppSettings settings) {
-    if (_latestLandmarks.isEmpty) {
-      return 'Step back until shoulders, hips, knees, and feet are visible.';
-    }
+  _StatusBadgeData? _statusBadgeData(AppSettings settings) {
     if (widget.referenceRecord == null) {
-      return 'Frame the first photo and use the shutter when you are ready.';
+      return null;
+    }
+    if (_latestLandmarks.isEmpty) {
+      return const _StatusBadgeData('Frame', Color(0xFF94A3B8));
     }
     if (!_canAutoCapture || !settings.autoCaptureEnabled) {
-      return 'Frame the photo and use the shutter when you are ready.';
+      return const _StatusBadgeData('Manual', Color(0xFF94A3B8));
     }
     if (_displayedAlignmentScore < settings.alignmentThreshold) {
-      return 'Match the latest photo before auto-capture begins.';
+      return const _StatusBadgeData('Align', Color(0xFFF59E0B));
     }
     if (_poseMotion > settings.stabilitySensitivity) {
-      return 'Hold still while the tracker settles on the current pose.';
+      return const _StatusBadgeData('Hold', Color(0xFFFB923C));
     }
 
     final elapsedMs = _alignmentHeldSince == null
@@ -893,8 +1156,13 @@ class _CameraViewState extends ConsumerState<CameraView> {
         : DateTime.now().difference(_alignmentHeldSince!).inMilliseconds;
     final remainingMs = (settings.autoCaptureDelay.inMilliseconds - elapsedMs)
         .clamp(0, settings.autoCaptureDelay.inMilliseconds);
-    final remainingSeconds = (remainingMs / 1000).toStringAsFixed(1);
-    return 'Aligned. Auto-capture in ${remainingSeconds}s.';
+    if (remainingMs == 0) {
+      return const _StatusBadgeData('Ready', Color(0xFF22C55E));
+    }
+    return _StatusBadgeData(
+      '${(remainingMs / 1000).toStringAsFixed(1)}s',
+      const Color(0xFF22C55E),
+    );
   }
 }
 
@@ -910,8 +1178,129 @@ class _CameraInput {
   final Size imageSize;
 }
 
-class _GlassIconButton extends StatelessWidget {
-  const _GlassIconButton({required this.icon, required this.onPressed});
+class _RearCameraSystem {
+  const _RearCameraSystem({required this.wide, this.ultraWide, this.telephoto});
+
+  final CameraDescription wide;
+  final CameraDescription? ultraWide;
+  final CameraDescription? telephoto;
+}
+
+class _BackCameraLaunchPlan {
+  const _BackCameraLaunchPlan({
+    required this.camera,
+    required this.preset,
+    required this.lensBaseZoom,
+    required this.desiredControllerZoom,
+  });
+
+  final CameraDescription camera;
+  final _ZoomPreset preset;
+  final double lensBaseZoom;
+  final double desiredControllerZoom;
+}
+
+enum _ZoomPreset {
+  ultraWide(0.6, '0.6x'),
+  wide(1.0, '1x'),
+  telephoto(2.0, '2x');
+
+  const _ZoomPreset(this.logicalZoom, this.label);
+
+  final double logicalZoom;
+  final String label;
+}
+
+class _StatusBadgeData {
+  const _StatusBadgeData(this.label, this.color);
+
+  final String label;
+  final Color color;
+}
+
+class _TopUtilityBar extends StatelessWidget {
+  const _TopUtilityBar({
+    required this.statusBadge,
+    required this.onClose,
+    required this.settingsButton,
+  });
+
+  final _StatusBadgeData? statusBadge;
+  final VoidCallback onClose;
+  final Widget settingsButton;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      child: Row(
+        children: [
+          _UtilityIconButton(icon: Icons.close_rounded, onPressed: onClose),
+          Expanded(
+            child: Center(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 180),
+                child: statusBadge == null
+                    ? const SizedBox.shrink()
+                    : _StatusPill(
+                        key: ValueKey(statusBadge!.label),
+                        label: statusBadge!.label,
+                        color: statusBadge!.color,
+                      ),
+              ),
+            ),
+          ),
+          settingsButton,
+        ],
+      ),
+    );
+  }
+}
+
+class _AspectRatioMenuButton extends StatelessWidget {
+  const _AspectRatioMenuButton({
+    required this.viewportRatio,
+    required this.onSelected,
+  });
+
+  final CaptureViewportRatio viewportRatio;
+  final ValueChanged<CaptureViewportRatio> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white12),
+      ),
+      child: PopupMenuButton<CaptureViewportRatio>(
+        tooltip: 'Viewport settings',
+        color: const Color(0xFF121212),
+        position: PopupMenuPosition.under,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        onSelected: onSelected,
+        icon: const Icon(Icons.tune_rounded, color: Colors.white),
+        itemBuilder: (context) => [
+          const PopupMenuItem<CaptureViewportRatio>(
+            enabled: false,
+            child: Text('Aspect ratio'),
+          ),
+          ...CaptureViewportRatio.values.map(
+            (ratio) => CheckedPopupMenuItem<CaptureViewportRatio>(
+              value: ratio,
+              checked: viewportRatio == ratio,
+              child: Text(ratio.label),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UtilityIconButton extends StatelessWidget {
+  const _UtilityIconButton({required this.icon, required this.onPressed});
 
   final IconData icon;
   final VoidCallback? onPressed;
@@ -920,8 +1309,9 @@ class _GlassIconButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.48),
+        color: Colors.white.withValues(alpha: 0.08),
         shape: BoxShape.circle,
+        border: Border.all(color: Colors.white12),
       ),
       child: IconButton(
         onPressed: onPressed,
@@ -931,36 +1321,34 @@ class _GlassIconButton extends StatelessWidget {
   }
 }
 
-class _InfoPill extends StatelessWidget {
-  const _InfoPill({required this.title, required this.subtitle});
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({super.key, required this.label, required this.color});
 
-  final String title;
-  final String subtitle;
+  final String label;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.48),
-        borderRadius: BorderRadius.circular(22),
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white10),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              title,
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-              ),
+            DecoratedBox(
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              child: const SizedBox(width: 8, height: 8),
             ),
-            const SizedBox(height: 2),
+            const SizedBox(width: 8),
             Text(
-              subtitle,
-              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
+              label,
+              style: Theme.of(context).textTheme.labelMedium
+                  ?.copyWith(color: Colors.white, fontWeight: FontWeight.w600),
             ),
           ],
         ),
@@ -969,66 +1357,49 @@ class _InfoPill extends StatelessWidget {
   }
 }
 
-class _CaptureStatusCard extends StatelessWidget {
-  const _CaptureStatusCard({
-    required this.score,
-    required this.statusText,
-    required this.progress,
-    required this.showProgress,
+class _ZoomPill extends StatelessWidget {
+  const _ZoomPill({
+    required this.label,
+    required this.enabled,
+    required this.selected,
+    required this.onTap,
   });
 
-  final double score;
-  final String statusText;
-  final double progress;
-  final bool showProgress;
+  final String label;
+  final bool enabled;
+  final bool selected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.58),
-        borderRadius: BorderRadius.circular(24),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Text(
-                  '${score.round()}% aligned',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const Spacer(),
-                if (showProgress)
-                  Text(
-                    '${(progress * 100).round()}%',
-                    style: theme.textTheme.labelLarge?.copyWith(
-                      color: Colors.white70,
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              statusText,
-              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
-            ),
-            if (showProgress) ...[
-              const SizedBox(height: 10),
-              LinearProgressIndicator(
-                value: progress,
-                minHeight: 5,
-                borderRadius: BorderRadius.circular(999),
-                backgroundColor: Colors.white24,
+    final backgroundColor = selected
+        ? Colors.white
+        : Colors.white.withValues(alpha: enabled ? 0.08 : 0.03);
+    final foregroundColor = selected
+        ? Colors.black
+        : enabled
+        ? Colors.white
+        : Colors.white38;
+
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 160),
+      opacity: enabled ? 1.0 : 0.45,
+      child: Material(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(999),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: enabled ? onTap : null,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: foregroundColor,
+                fontWeight: FontWeight.w700,
               ),
-            ],
-          ],
+            ),
+          ),
         ),
       ),
     );
@@ -1039,11 +1410,13 @@ class _ShutterButton extends StatelessWidget {
   const _ShutterButton({
     required this.busy,
     required this.semanticLabel,
+    required this.outlineColor,
     required this.onPressed,
   });
 
   final bool busy;
   final String semanticLabel;
+  final Color outlineColor;
   final VoidCallback? onPressed;
 
   @override
@@ -1053,10 +1426,19 @@ class _ShutterButton extends StatelessWidget {
       label: semanticLabel,
       child: GestureDetector(
         onTap: onPressed,
-        child: DecoratedBox(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 4),
+            border: Border.all(color: outlineColor, width: 4),
+            boxShadow: [
+              BoxShadow(
+                color: outlineColor.withValues(alpha: 0.18),
+                blurRadius: 14,
+                spreadRadius: 1,
+              ),
+            ],
           ),
           child: Padding(
             padding: const EdgeInsets.all(6),
