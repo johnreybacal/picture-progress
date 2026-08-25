@@ -7,6 +7,7 @@ class AppSettings {
     this.stabilitySensitivity = AppConstants.defaultStabilitySensitivity,
     this.autoCaptureDelay = AppConstants.defaultAutoCaptureDelay,
     this.showReferenceOverlay = true,
+    this.showLiveSkeletonOverlay = true,
     this.referenceOverlayOpacity = AppConstants.defaultReferenceOverlayOpacity,
     this.photoStorageDirectoryPath = '',
     this.exportDirectoryPath = '',
@@ -17,6 +18,7 @@ class AppSettings {
   final double stabilitySensitivity;
   final Duration autoCaptureDelay;
   final bool showReferenceOverlay;
+  final bool showLiveSkeletonOverlay;
   final double referenceOverlayOpacity;
   final String photoStorageDirectoryPath;
   final String exportDirectoryPath;
@@ -27,6 +29,7 @@ class AppSettings {
     double? stabilitySensitivity,
     Duration? autoCaptureDelay,
     bool? showReferenceOverlay,
+    bool? showLiveSkeletonOverlay,
     double? referenceOverlayOpacity,
     String? photoStorageDirectoryPath,
     String? exportDirectoryPath,
@@ -37,6 +40,8 @@ class AppSettings {
       stabilitySensitivity: stabilitySensitivity ?? this.stabilitySensitivity,
       autoCaptureDelay: autoCaptureDelay ?? this.autoCaptureDelay,
       showReferenceOverlay: showReferenceOverlay ?? this.showReferenceOverlay,
+      showLiveSkeletonOverlay:
+          showLiveSkeletonOverlay ?? this.showLiveSkeletonOverlay,
       referenceOverlayOpacity:
           referenceOverlayOpacity ?? this.referenceOverlayOpacity,
       photoStorageDirectoryPath:

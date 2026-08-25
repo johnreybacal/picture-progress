@@ -9,7 +9,7 @@ class PoseSeries {
     required this.thumbnailPath,
     this.preferredLens,
     this.lastUsedZoomLevel,
-    this.lastUsedAspectRatio = CaptureViewportRatio.full,
+    this.lastUsedAspectRatio = CaptureViewportRatio.threeByFour,
   });
 
   final int? id;

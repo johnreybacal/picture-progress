@@ -7,6 +7,7 @@ import '../core/utils/timelapse_command_builder.dart';
 import '../data/models/pose_record.dart';
 import '../data/models/pose_series.dart';
 import '../data/repositories/pose_repository.dart';
+import '../data/services/backup_service.dart';
 import '../data/services/database_service.dart';
 import '../data/services/file_storage_service.dart';
 import '../data/services/permission_service.dart';
@@ -38,6 +39,13 @@ final dynamicAlignmentServiceProvider = Provider<DynamicAlignmentService>((
 
 final poseRepositoryProvider = Provider<PoseRepository>((ref) {
   return PoseRepository(
+    databaseService: ref.watch(databaseServiceProvider),
+    fileStorageService: ref.watch(fileStorageServiceProvider),
+  );
+});
+
+final backupServiceProvider = Provider<BackupService>((ref) {
+  return BackupService(
     databaseService: ref.watch(databaseServiceProvider),
     fileStorageService: ref.watch(fileStorageServiceProvider),
   );
@@ -135,6 +143,10 @@ class AppSettingsController extends StateNotifier<AppSettings> {
 
   void setReferenceOverlayEnabled(bool enabled) {
     state = state.copyWith(showReferenceOverlay: enabled);
+  }
+
+  void setLiveSkeletonOverlayEnabled(bool enabled) {
+    state = state.copyWith(showLiveSkeletonOverlay: enabled);
   }
 
   void setReferenceOverlayOpacity(double opacity) {

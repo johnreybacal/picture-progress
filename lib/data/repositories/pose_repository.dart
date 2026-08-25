@@ -35,7 +35,7 @@ class PoseRepository {
       thumbnailPath: '',
       preferredLens: null,
       lastUsedZoomLevel: null,
-      lastUsedAspectRatio: CaptureViewportRatio.full,
+      lastUsedAspectRatio: CaptureViewportRatio.threeByFour,
     );
 
     final id = await db.insert(
@@ -143,33 +143,17 @@ class PoseRepository {
     required int imageHeight,
     double? captureZoomLevel,
     CaptureViewportRatio? captureViewportRatio,
-    bool mirrorLandmarksHorizontally = false,
   }) async {
     final db = await databaseService.database;
-
-    final storedLandmarks = mirrorLandmarksHorizontally
-        ? _mirrorLandmarks(landmarks, imageWidth.toDouble())
-        : landmarks;
-    final storedBoundingBox = mirrorLandmarksHorizontally
-        ? PoseBoundingBox(
-            left: imageWidth - boundingBox.right,
-            top: boundingBox.top,
-            right: imageWidth - boundingBox.left,
-            bottom: boundingBox.bottom,
-          )
-        : boundingBox;
-    final storedAnchorCenter = mirrorLandmarksHorizontally
-        ? PosePoint(x: imageWidth - anchorCenter.x, y: anchorCenter.y)
-        : anchorCenter;
 
     final record = PoseRecord(
       seriesId: seriesId,
       imagePath: imagePath,
       label: label,
       timestamp: timestamp,
-      landmarks: storedLandmarks,
-      boundingBox: storedBoundingBox,
-      anchorCenter: storedAnchorCenter,
+      landmarks: landmarks,
+      boundingBox: boundingBox,
+      anchorCenter: anchorCenter,
       cameraLens: cameraLens,
       captureOrientation: captureOrientation,
       imageWidth: imageWidth,
@@ -253,14 +237,5 @@ class PoseRepository {
       where: 'id = ?',
       whereArgs: [seriesId],
     );
-  }
-
-  List<PoseLandmarkPoint> _mirrorLandmarks(
-    List<PoseLandmarkPoint> landmarks,
-    double imageWidth,
-  ) {
-    return landmarks
-        .map((landmark) => landmark.copyWith(x: imageWidth - landmark.x))
-        .toList(growable: false);
   }
 }

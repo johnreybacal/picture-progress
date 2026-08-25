@@ -124,6 +124,17 @@ class AppSettingsView extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 16),
+            Card(
+              child: SwitchListTile.adaptive(
+                value: settings.showLiveSkeletonOverlay,
+                onChanged: controller.setLiveSkeletonOverlayEnabled,
+                title: const Text('Show live pose skeleton'),
+                subtitle: const Text(
+                  'Draw the current detected pose on top of the live camera preview.',
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
             _SettingCard(
               title: 'Guide overlay opacity',
               subtitle: 'Adjust how visible the saved guide appears over the camera preview.',

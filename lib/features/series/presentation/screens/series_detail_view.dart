@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -11,13 +13,22 @@ import '../../../settings/presentation/screens/app_settings_view.dart';
 import 'progress_shot_detail_view.dart';
 
 class TimelineDetailView extends SeriesDetailView {
-  const TimelineDetailView({super.key, required super.initialSeries});
+  const TimelineDetailView({
+    super.key,
+    required super.initialSeries,
+    super.openCameraOnLaunch,
+  });
 }
 
 class SeriesDetailView extends ConsumerStatefulWidget {
-  const SeriesDetailView({super.key, required this.initialSeries});
+  const SeriesDetailView({
+    super.key,
+    required this.initialSeries,
+    this.openCameraOnLaunch = false,
+  });
 
   final PoseSeries initialSeries;
+  final bool openCameraOnLaunch;
 
   @override
   ConsumerState<SeriesDetailView> createState() => _SeriesDetailViewState();
@@ -25,17 +36,31 @@ class SeriesDetailView extends ConsumerStatefulWidget {
 
 class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
   late PoseSeries _series;
+  bool _didTriggerInitialCamera = false;
 
   @override
   void initState() {
     super.initState();
     _series = widget.initialSeries;
+    if (widget.openCameraOnLaunch) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _didTriggerInitialCamera) {
+          return;
+        }
+        _didTriggerInitialCamera = true;
+        unawaited(_openCamera(referenceRecord: null));
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final recordsAsync = ref.watch(seriesRecordsProvider(_series.id!));
     final dynamicAlignmentService = ref.read(dynamicAlignmentServiceProvider);
+    final records = recordsAsync.maybeWhen(
+      data: (value) => value,
+      orElse: () => const <PoseRecord>[],
+    );
     final hasRecords = recordsAsync.maybeWhen(
       data: (records) => records.isNotEmpty,
       orElse: () => false,
@@ -76,6 +101,9 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
           PopupMenuButton<_SeriesDetailAction>(
             onSelected: (action) {
               switch (action) {
+                case _SeriesDetailAction.exportBackup:
+                  _exportBackup(records);
+                  break;
                 case _SeriesDetailAction.edit:
                   _renameSeries();
                   break;
@@ -84,12 +112,17 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
                   break;
               }
             },
-            itemBuilder: (context) => const [
+            itemBuilder: (context) => [
               PopupMenuItem(
+                value: _SeriesDetailAction.exportBackup,
+                enabled: hasRecords,
+                child: const Text('Export backup (.zip)'),
+              ),
+              const PopupMenuItem(
                 value: _SeriesDetailAction.edit,
                 child: Text('Rename timeline'),
               ),
-              PopupMenuItem(
+              const PopupMenuItem(
                 value: _SeriesDetailAction.delete,
                 child: Text('Delete timeline'),
               ),
@@ -297,6 +330,35 @@ class _SeriesDetailViewState extends ConsumerState<SeriesDetailView> {
     });
   }
 
+  Future<void> _exportBackup(List<PoseRecord> records) async {
+    if (records.isEmpty) {
+      return;
+    }
+
+    try {
+      final result = await ref
+          .read(backupServiceProvider)
+          .exportSeriesBackup(series: _series, records: records);
+      if (!mounted || result == null) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Saved ${result.recordCount} photos to ${result.destinationUri}.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
   Future<void> _deleteSeries() async {
     final shouldDelete = await showDialog<bool>(
       context: context,
@@ -390,4 +452,4 @@ class _RecordTile extends StatelessWidget {
   }
 }
 
-enum _SeriesDetailAction { edit, delete }
+enum _SeriesDetailAction { exportBackup, edit, delete }

@@ -1,8 +1,12 @@
+import 'dart:math' as math;
+
 import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:native_device_orientation/native_device_orientation.dart';
 
+import '../../data/models/capture_viewport_ratio.dart';
 import '../../data/models/capture_orientation.dart';
+import 'camera_viewport_geometry.dart';
 
 class RotationUtility {
   RotationUtility({
@@ -15,30 +19,87 @@ class RotationUtility {
   Future<RotatedCaptureResult> transformJpegForStorage({
     required Uint8List jpegBytes,
     required DeviceOrientation fallbackOrientation,
+    CaptureViewportRatio viewportRatio = CaptureViewportRatio.full,
+    Size? previewCanvasSize,
   }) async {
-    final physicalOrientation = await readPhysicalOrientation();
+    final physicalOrientation = _deviceOrientationForFallback(
+      fallbackOrientation,
+    );
+    final storedOrientation = _captureOrientationForFallback(
+      fallbackOrientation,
+    );
     final decoded = img.decodeJpg(jpegBytes) ?? img.decodeImage(jpegBytes);
     if (decoded == null) {
       return RotatedCaptureResult(
         bytes: jpegBytes,
-        storedOrientation: CaptureOrientation.portrait,
+        storedOrientation: storedOrientation,
         physicalOrientation: physicalOrientation,
       );
     }
 
     final bakedImage = img.bakeOrientation(decoded);
-    final rotationDegrees = _portraitNormalizationDegrees(
-      physicalOrientation,
-      fallbackOrientation,
+    final croppedImage = _cropForViewport(
+      bakedImage,
+      storedOrientation: storedOrientation,
+      viewportRatio: viewportRatio,
+      previewCanvasSize: previewCanvasSize,
     );
-    final rotatedImage = rotationDegrees == 0
-        ? bakedImage
-        : img.copyRotate(bakedImage, angle: rotationDegrees);
 
     return RotatedCaptureResult(
-      bytes: Uint8List.fromList(img.encodeJpg(rotatedImage, quality: 94)),
-      storedOrientation: CaptureOrientation.portrait,
+      bytes: Uint8List.fromList(img.encodeJpg(croppedImage, quality: 94)),
+      storedOrientation: storedOrientation,
       physicalOrientation: physicalOrientation,
+    );
+  }
+
+  img.Image _cropForViewport(
+    img.Image source, {
+    required CaptureOrientation storedOrientation,
+    required CaptureViewportRatio viewportRatio,
+    required Size? previewCanvasSize,
+  }) {
+    if (previewCanvasSize == null ||
+        previewCanvasSize.isEmpty ||
+        viewportRatio.isFull) {
+      return source;
+    }
+
+    final rawSize = Size(source.width.toDouble(), source.height.toDouble());
+    final displayQuarterTurns = storedOrientation.quarterTurnsForDisplay(
+      rawWidth: source.width,
+      rawHeight: source.height,
+    );
+    final displaySize = displayQuarterTurns.isOdd
+        ? Size(rawSize.height, rawSize.width)
+        : rawSize;
+    final displayCropRect = resolveViewportCropRectInDisplaySpace(
+      previewCanvasSize: previewCanvasSize,
+      displayImageSize: displaySize,
+      viewportRatio: viewportRatio,
+    );
+    final rawCropRect = mapDisplayRectToRawImageRect(
+      displayRect: displayCropRect,
+      rawImageSize: rawSize,
+      quarterTurns: displayQuarterTurns,
+    );
+
+    final left = rawCropRect.left.floor().clamp(0, source.width - 1);
+    final top = rawCropRect.top.floor().clamp(0, source.height - 1);
+    final right = rawCropRect.right.ceil().clamp(left + 1, source.width);
+    final bottom = rawCropRect.bottom.ceil().clamp(top + 1, source.height);
+    final cropWidth = math.max(1, right - left);
+    final cropHeight = math.max(1, bottom - top);
+
+    if (cropWidth >= source.width && cropHeight >= source.height) {
+      return source;
+    }
+
+    return img.copyCrop(
+      source,
+      x: left,
+      y: top,
+      width: cropWidth,
+      height: cropHeight,
     );
   }
 
@@ -49,41 +110,33 @@ class RotationUtility {
     return orientation;
   }
 
-  int _portraitNormalizationDegrees(
-    NativeDeviceOrientation physicalOrientation,
+  CaptureOrientation _captureOrientationForFallback(
     DeviceOrientation fallbackOrientation,
   ) {
-    return _degreesForOrientation(physicalOrientation, fallbackOrientation);
-  }
-
-  int _degreesForOrientation(
-    NativeDeviceOrientation orientation,
-    DeviceOrientation fallbackOrientation,
-  ) {
-    switch (orientation) {
-      case NativeDeviceOrientation.portraitUp:
-        return 0;
-      case NativeDeviceOrientation.landscapeLeft:
-        return 90;
-      case NativeDeviceOrientation.portraitDown:
-        return 180;
-      case NativeDeviceOrientation.landscapeRight:
-        return 270;
-      case NativeDeviceOrientation.unknown:
-        return _degreesForFallback(fallbackOrientation);
+    switch (fallbackOrientation) {
+      case DeviceOrientation.portraitUp:
+        return CaptureOrientation.portrait;
+      case DeviceOrientation.landscapeLeft:
+        return CaptureOrientation.landscapeLeft;
+      case DeviceOrientation.portraitDown:
+        return CaptureOrientation.portraitDown;
+      case DeviceOrientation.landscapeRight:
+        return CaptureOrientation.landscapeRight;
     }
   }
 
-  int _degreesForFallback(DeviceOrientation orientation) {
-    switch (orientation) {
+  NativeDeviceOrientation _deviceOrientationForFallback(
+    DeviceOrientation fallbackOrientation,
+  ) {
+    switch (fallbackOrientation) {
       case DeviceOrientation.portraitUp:
-        return 0;
+        return NativeDeviceOrientation.portraitUp;
       case DeviceOrientation.landscapeLeft:
-        return 90;
+        return NativeDeviceOrientation.landscapeLeft;
       case DeviceOrientation.portraitDown:
-        return 180;
+        return NativeDeviceOrientation.portraitDown;
       case DeviceOrientation.landscapeRight:
-        return 270;
+        return NativeDeviceOrientation.landscapeRight;
     }
   }
 }

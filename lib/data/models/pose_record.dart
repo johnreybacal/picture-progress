@@ -208,6 +208,8 @@ class PoseRecord {
     switch (quarterTurns) {
       case 1:
         return PosePoint(x: rawHeight - point.y, y: point.x);
+      case 2:
+        return PosePoint(x: rawWidth - point.x, y: rawHeight - point.y);
       case 3:
         return PosePoint(x: point.y, y: rawWidth - point.x);
       default:

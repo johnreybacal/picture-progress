@@ -3,9 +3,13 @@ import 'package:camera/camera.dart';
 import '../../data/models/pose_landmark_point.dart';
 import '../../data/models/pose_record.dart';
 import 'pose_alignment_engine.dart';
+import 'reference_skeleton_transformer.dart';
 
 class DynamicAlignmentService {
   const DynamicAlignmentService();
+
+  static const ReferenceSkeletonTransformer _transformer =
+      ReferenceSkeletonTransformer();
 
   PoseRecord? resolveReferenceRecord(List<PoseRecord> records) {
     if (records.isEmpty) {
@@ -24,9 +28,10 @@ class DynamicAlignmentService {
   }) {
     final mirrorReferenceHorizontally =
         referenceRecord.cameraLens != activeLensDirection.name;
+    final transformedReference = _transformer.transform(referenceRecord);
     final alignment = PoseAlignmentEngine.compare(
       liveLandmarks: liveLandmarks,
-      referenceLandmarks: referenceRecord.landmarks,
+      referenceLandmarks: transformedReference.landmarks,
       mirrorReferenceHorizontally: mirrorReferenceHorizontally,
     );
     return DynamicAlignmentComparison(

@@ -1,33 +1,28 @@
-import 'dart:math';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
-import '../../data/models/pose_landmark_point.dart';
 import '../../data/models/pose_record.dart';
-import '../constants/app_constants.dart';
-import '../utils/pose_alignment_engine.dart';
-import '../utils/pose_preview_coordinate_transformer.dart';
 import '../utils/pose_skeleton_graph.dart';
+import '../utils/reference_skeleton_transformer.dart';
 
 class ReferenceGuidePainter extends CustomPainter {
   ReferenceGuidePainter({
     required this.referenceRecord,
-    required this.liveLandmarks,
-    required this.liveImageSize,
-    required this.liveRotation,
     required this.opacity,
     required this.mirrorHorizontally,
+    this.viewportRect,
     this.pointColor = const Color(0xFFFDE68A),
     this.lineColor = const Color(0xFFF97316),
   });
 
+  static const ReferenceSkeletonTransformer _transformer =
+      ReferenceSkeletonTransformer();
+
   final PoseRecord referenceRecord;
-  final List<PoseLandmarkPoint> liveLandmarks;
-  final Size liveImageSize;
-  final InputImageRotation liveRotation;
   final double opacity;
   final bool mirrorHorizontally;
+  final Rect? viewportRect;
   final Color pointColor;
   final Color lineColor;
 
@@ -38,34 +33,34 @@ class ReferenceGuidePainter extends CustomPainter {
       return;
     }
 
-    final landmarks = referenceRecord.displayLandmarks();
-    final visibleLandmarks = landmarks
-        .where(
-          (landmark) =>
-              landmark.likelihood >= AppConstants.minimumLandmarkLikelihood,
-        )
-        .toList(growable: false);
-    if (visibleLandmarks.length < 6) {
+    final transformedReference = _transformer.transform(referenceRecord);
+    final renderedLandmarks = transformedReference.landmarks;
+    if (renderedLandmarks.isEmpty) {
       return;
     }
 
-    final anchor = referenceRecord.displayAnchorCenter();
-    final referenceScale = max(
-      PoseGeometry.bodyScaleFor(visibleLandmarks),
-      1.0,
-    );
-    final liveProjection = _resolveLiveProjection(size);
-    final anchorOffset = liveProjection.anchorOffset;
-    final projectedBodyHeight = liveProjection.bodyScale;
+    final targetRect = viewportRect ?? (Offset.zero & size);
+    if (targetRect.isEmpty) {
+      return;
+    }
 
-    final projected = <String, Offset>{};
-    for (final landmark in visibleLandmarks) {
-      final normalizedX = (landmark.x - anchor.x) / referenceScale;
-      final normalizedY = (landmark.y - anchor.y) / referenceScale;
-      final direction = mirrorHorizontally ? -1.0 : 1.0;
-      projected[landmark.type] = Offset(
-        anchorOffset.dx + (normalizedX * projectedBodyHeight * direction),
-        anchorOffset.dy + (normalizedY * projectedBodyHeight),
+    canvas.save();
+    canvas.clipRect(targetRect);
+
+    final projection = _resolveProjection(
+      targetRect: targetRect,
+      referenceWidth: transformedReference.imageWidth.toDouble(),
+      referenceHeight: transformedReference.imageHeight.toDouble(),
+    );
+
+    final projectedOffsets = <String, Offset>{};
+    for (final landmark in renderedLandmarks) {
+      final sourceX = mirrorHorizontally
+          ? transformedReference.imageWidth.toDouble() - landmark.x
+          : landmark.x;
+      projectedOffsets[landmark.type] = Offset(
+        projection.left + (sourceX * projection.scale),
+        projection.top + (landmark.y * projection.scale),
       );
     }
 
@@ -77,18 +72,18 @@ class ReferenceGuidePainter extends CustomPainter {
     final pointPaint = Paint()..style = PaintingStyle.fill;
 
     for (final connection in PoseSkeletonGraph.visibleConnections(
-      visibleLandmarks,
+      renderedLandmarks,
     )) {
-      final start = projected[connection.startType];
-      final end = projected[connection.endType];
+      final start = projectedOffsets[connection.startType];
+      final end = projectedOffsets[connection.endType];
       if (start == null || end == null) {
         continue;
       }
       canvas.drawLine(start, end, linePaint);
     }
 
-    for (final landmark in visibleLandmarks) {
-      final offset = projected[landmark.type];
+    for (final landmark in renderedLandmarks) {
+      final offset = projectedOffsets[landmark.type];
       if (offset == null) {
         continue;
       }
@@ -97,127 +92,49 @@ class ReferenceGuidePainter extends CustomPainter {
       );
       canvas.drawCircle(offset, 3.6, pointPaint);
     }
+
+    canvas.restore();
   }
 
   @override
   bool shouldRepaint(covariant ReferenceGuidePainter oldDelegate) {
     return oldDelegate.referenceRecord != referenceRecord ||
-        oldDelegate.liveLandmarks != liveLandmarks ||
-        oldDelegate.liveImageSize != liveImageSize ||
-        oldDelegate.liveRotation != liveRotation ||
         oldDelegate.opacity != opacity ||
         oldDelegate.mirrorHorizontally != mirrorHorizontally ||
+        oldDelegate.viewportRect != viewportRect ||
         oldDelegate.pointColor != pointColor ||
         oldDelegate.lineColor != lineColor;
   }
 
-  _LiveProjection _resolveLiveProjection(Size canvasSize) {
-    final visibleLiveLandmarks = liveLandmarks
-        .where(
-          (landmark) =>
-              landmark.likelihood >= AppConstants.minimumLandmarkLikelihood,
-        )
-        .toList(growable: false);
-    if (visibleLiveLandmarks.isEmpty || liveImageSize.isEmpty) {
-      return _fallbackProjection(canvasSize);
-    }
-
-    final transformer = PosePreviewCoordinateTransformer(
-      imageSize: liveImageSize,
-      rotation: liveRotation,
+  _ReferenceProjection _resolveProjection({
+    required Rect targetRect,
+    required double referenceWidth,
+    required double referenceHeight,
+  }) {
+    final safeReferenceWidth = math.max(referenceWidth, 1.0);
+    final safeReferenceHeight = math.max(referenceHeight, 1.0);
+    final scale = math.max(
+      targetRect.width / safeReferenceWidth,
+      targetRect.height / safeReferenceHeight,
     );
-
-    final projectedByType = <String, Offset>{};
-    for (final landmark in visibleLiveLandmarks) {
-      projectedByType[landmark.type] = transformer.project(
-        x: landmark.x,
-        y: landmark.y,
-        canvasSize: canvasSize,
-      );
-    }
-
-    final anchorPoint = PoseGeometry.anchorFor(visibleLiveLandmarks);
-    final anchorOffset = transformer.project(
-      x: anchorPoint.x,
-      y: anchorPoint.y,
-      canvasSize: canvasSize,
+    final fittedWidth = safeReferenceWidth * scale;
+    final fittedHeight = safeReferenceHeight * scale;
+    return _ReferenceProjection(
+      scale: scale,
+      left: targetRect.left + ((targetRect.width - fittedWidth) / 2),
+      top: targetRect.top + ((targetRect.height - fittedHeight) / 2),
     );
-    final bodyScale = _liveBodyScale(projectedByType);
-    if (bodyScale <= 0) {
-      return _fallbackProjection(canvasSize);
-    }
-
-    return _LiveProjection(anchorOffset: anchorOffset, bodyScale: bodyScale);
-  }
-
-  _LiveProjection _fallbackProjection(Size canvasSize) {
-    final boundingBox = referenceRecord.displayBoundingBox();
-    final displayHeight = max(
-      referenceRecord.displayImageHeight.toDouble(),
-      1.0,
-    );
-    final normalizedBodyHeight = (boundingBox.height / displayHeight).clamp(
-      0.28,
-      0.72,
-    );
-    return _LiveProjection(
-      anchorOffset: Offset(
-        canvasSize.width * AppConstants.targetAnchorX,
-        canvasSize.height * AppConstants.targetAnchorY,
-      ),
-      bodyScale: canvasSize.height * normalizedBodyHeight,
-    );
-  }
-
-  double _liveBodyScale(Map<String, Offset> projectedByType) {
-    final shoulderMidpoint = _projectedMidpoint(
-      projectedByType,
-      'leftShoulder',
-      'rightShoulder',
-    );
-    final hipMidpoint = _projectedMidpoint(
-      projectedByType,
-      'leftHip',
-      'rightHip',
-    );
-    if (shoulderMidpoint != null && hipMidpoint != null) {
-      return (hipMidpoint - shoulderMidpoint).distance;
-    }
-
-    final projectedOffsets = projectedByType.values.toList(growable: false);
-    if (projectedOffsets.isEmpty) {
-      return 0;
-    }
-    final xs = projectedOffsets
-        .map((offset) => offset.dx)
-        .toList(growable: false);
-    final ys = projectedOffsets
-        .map((offset) => offset.dy)
-        .toList(growable: false);
-    return max(
-      xs.reduce(max) - xs.reduce(min),
-      ys.reduce(max) - ys.reduce(min),
-    );
-  }
-
-  Offset? _projectedMidpoint(
-    Map<String, Offset> projectedByType,
-    String firstType,
-    String secondType,
-  ) {
-    final first = projectedByType[firstType];
-    final second = projectedByType[secondType];
-    if (first == null || second == null) {
-      return null;
-    }
-
-    return Offset((first.dx + second.dx) / 2, (first.dy + second.dy) / 2);
   }
 }
 
-class _LiveProjection {
-  const _LiveProjection({required this.anchorOffset, required this.bodyScale});
+class _ReferenceProjection {
+  const _ReferenceProjection({
+    required this.scale,
+    required this.left,
+    required this.top,
+  });
 
-  final Offset anchorOffset;
-  final double bodyScale;
+  final double scale;
+  final double left;
+  final double top;
 }

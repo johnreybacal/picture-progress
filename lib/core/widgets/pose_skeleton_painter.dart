@@ -1,10 +1,10 @@
 import 'dart:math';
 
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
 import '../../data/models/pose_landmark_point.dart';
-import '../constants/app_constants.dart';
 import '../utils/pose_preview_coordinate_transformer.dart';
 import '../utils/pose_skeleton_graph.dart';
 
@@ -13,6 +13,7 @@ class SkeletonPainter extends CustomPainter {
     required this.landmarks,
     required this.imageSize,
     required this.rotation,
+    required this.lensDirection,
     this.pointColor = const Color(0xFF5EEAD4),
     this.lineColor = const Color(0xFF34D399),
   });
@@ -20,6 +21,7 @@ class SkeletonPainter extends CustomPainter {
   final List<PoseLandmarkPoint> landmarks;
   final Size imageSize;
   final InputImageRotation rotation;
+  final CameraLensDirection lensDirection;
   final Color pointColor;
   final Color lineColor;
 
@@ -32,14 +34,11 @@ class SkeletonPainter extends CustomPainter {
     final transformer = PosePreviewCoordinateTransformer(
       imageSize: imageSize,
       rotation: rotation,
+      lensDirection: lensDirection,
     );
 
     final projectedLandmarks = <String, _ProjectedLandmark>{};
     for (final landmark in landmarks) {
-      if (landmark.likelihood < AppConstants.minimumLandmarkLikelihood) {
-        continue;
-      }
-
       final offset = transformer.project(
         x: landmark.x,
         y: landmark.y,
@@ -65,11 +64,11 @@ class SkeletonPainter extends CustomPainter {
       ..strokeWidth = 3.2
       ..strokeCap = StrokeCap.round;
 
-    final visibleLandmarks = projectedLandmarks.values
+    final renderedLandmarks = projectedLandmarks.values
         .map((entry) => entry.landmark)
         .toList(growable: false);
     for (final connection in PoseSkeletonGraph.visibleConnections(
-      visibleLandmarks,
+      renderedLandmarks,
     )) {
       final start = projectedLandmarks[connection.startType]!;
       final end = projectedLandmarks[connection.endType]!;
@@ -81,8 +80,8 @@ class SkeletonPainter extends CustomPainter {
       final depthFactor = (1 - (landmark.z / 800).clamp(-0.5, 0.8)).toDouble();
       final radius = max(2.4, 4.2 * depthFactor);
       pointPaint.color = pointColor.withValues(
-        alpha: landmark.likelihood
-            .clamp(AppConstants.minimumLandmarkLikelihood, 1.0)
+        alpha: (0.35 + (0.65 * landmark.likelihood.clamp(0.0, 1.0)))
+            .clamp(0.0, 1.0)
             .toDouble(),
       );
       canvas.drawCircle(entry.offset, radius, pointPaint);
@@ -101,6 +100,7 @@ class SkeletonPainter extends CustomPainter {
     return oldDelegate.landmarks != landmarks ||
         oldDelegate.imageSize != imageSize ||
         oldDelegate.rotation != rotation ||
+        oldDelegate.lensDirection != lensDirection ||
         oldDelegate.pointColor != pointColor ||
         oldDelegate.lineColor != lineColor;
   }
@@ -139,10 +139,6 @@ class StoredPoseSkeletonPainter extends CustomPainter {
 
     final projectedLandmarks = <String, _ProjectedLandmark>{};
     for (final landmark in landmarks) {
-      if (landmark.likelihood < AppConstants.minimumLandmarkLikelihood) {
-        continue;
-      }
-
       final offset = _mapOffset(landmark, inputRect, outputRect);
       if (offset == null || !_isInsideCanvas(offset, size)) {
         continue;
@@ -161,11 +157,11 @@ class StoredPoseSkeletonPainter extends CustomPainter {
       ..strokeWidth = max(1.8, size.shortestSide * 0.022);
     final pointPaint = Paint()..style = PaintingStyle.fill;
 
-    final visibleLandmarks = projectedLandmarks.values
+    final renderedLandmarks = projectedLandmarks.values
         .map((entry) => entry.landmark)
         .toList(growable: false);
     for (final connection in PoseSkeletonGraph.visibleConnections(
-      visibleLandmarks,
+      renderedLandmarks,
     )) {
       final start = projectedLandmarks[connection.startType]!;
       final end = projectedLandmarks[connection.endType]!;
@@ -176,10 +172,10 @@ class StoredPoseSkeletonPainter extends CustomPainter {
       final landmark = entry.landmark;
       pointPaint.color = pointColor.withValues(
         alpha:
-            landmark.likelihood
-                .clamp(AppConstants.minimumLandmarkLikelihood, 1.0)
-                .toDouble() *
-            opacity.clamp(0.0, 1.0),
+            ((0.35 + (0.65 * landmark.likelihood.clamp(0.0, 1.0))) *
+                    opacity.clamp(0.0, 1.0))
+                .clamp(0.0, 1.0)
+                .toDouble(),
       );
       canvas.drawCircle(
         entry.offset,

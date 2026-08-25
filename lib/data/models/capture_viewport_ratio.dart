@@ -19,6 +19,6 @@ enum CaptureViewportRatio {
       }
     }
 
-    return CaptureViewportRatio.full;
+    return CaptureViewportRatio.threeByFour;
   }
 }

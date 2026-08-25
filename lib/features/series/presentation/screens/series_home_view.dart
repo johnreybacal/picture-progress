@@ -5,7 +5,6 @@ import '../../../../app/providers.dart';
 import '../../../../core/widgets/pose_thumbnail.dart';
 import '../../../../data/models/pose_record.dart';
 import '../../../../data/models/pose_series.dart';
-import '../../../capture/presentation/screens/camera_view.dart';
 import '../../../settings/presentation/screens/app_settings_view.dart';
 import 'series_detail_view.dart';
 
@@ -20,6 +19,11 @@ class SeriesHomeView extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Picture Progress'),
         actions: [
+          IconButton(
+            onPressed: () => _importBackup(context, ref),
+            icon: const Icon(Icons.upload_file_rounded),
+            tooltip: 'Restore timeline backup',
+          ),
           IconButton(
             onPressed: () {
               Navigator.of(context).push(
@@ -122,9 +126,12 @@ class SeriesHomeView extends ConsumerWidget {
       return;
     }
 
-    await Navigator.of(context).push<bool>(
+    await Navigator.of(context).push<void>(
       MaterialPageRoute(
-        builder: (context) => CameraView(series: createdSeries),
+        builder: (context) => SeriesDetailView(
+          initialSeries: createdSeries,
+          openCameraOnLaunch: true,
+        ),
       ),
     );
 
@@ -134,6 +141,50 @@ class SeriesHomeView extends ConsumerWidget {
 
     ref.invalidate(seriesRecordsProvider(createdSeries.id!));
     await ref.read(seriesListControllerProvider.notifier).refresh();
+  }
+
+  Future<void> _importBackup(BuildContext context, WidgetRef ref) async {
+    try {
+      final settings = ref.read(appSettingsProvider);
+      final result = await ref
+          .read(backupServiceProvider)
+          .importSeriesBackup(
+            preferredPhotoRootPath: settings.photoStorageDirectoryPath.isEmpty
+                ? null
+                : settings.photoStorageDirectoryPath,
+          );
+      if (result == null) {
+        return;
+      }
+
+      await ref.read(seriesListControllerProvider.notifier).refresh();
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Restored ${result.recordCount} photos into ${result.series.name}.',
+          ),
+        ),
+      );
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => SeriesDetailView(initialSeries: result.series),
+        ),
+      );
+      if (!context.mounted) {
+        return;
+      }
+      await ref.read(seriesListControllerProvider.notifier).refresh();
+    } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error.toString())));
+    }
   }
 
   Future<void> _renameSeries(
